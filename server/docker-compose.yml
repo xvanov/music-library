@@ -1,0 +1,60 @@
+# Deployed at ~/music-server on the home box. Ports bind to the tailnet
+# address only, so nothing here is reachable from the public internet.
+#
+# Requires a sibling .env containing:
+#   TAILNET_IP=100.x.y.z
+#   PUID=1000
+#   PGID=1000
+#   UPLOAD_PASS=<pick something>
+services:
+  navidrome:
+    image: deluan/navidrome:latest
+    container_name: navidrome
+    user: "${PUID}:${PGID}"
+    restart: unless-stopped
+    ports:
+      - "${TAILNET_IP}:4533:4533"
+    environment:
+      ND_LOGLEVEL: info
+      # drop DB rows for files that no longer exist, instead of keeping ghosts
+      ND_SCANNER_PURGEMISSING: always
+      ND_SCANSCHEDULE: 1m
+      ND_SESSIONTIMEOUT: 720h
+      ND_ENABLETRANSCODINGCONFIG: "true"
+      ND_ENABLEDOWNLOADS: "true"
+      ND_ENABLESHARING: "true"
+      ND_BASEURL: ""
+    volumes:
+      - ./data:/data
+      - ./music:/music:rw
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4533/ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  # WebDAV + web UI for getting files in. iOS Files can mount this directly.
+  uploader:
+    image: sigoden/dufs:latest
+    container_name: music-uploader
+    restart: unless-stopped
+    user: "${PUID}:${PGID}"
+    ports:
+      - "${TAILNET_IP}:4534:5000"
+    volumes:
+      - ./music:/data
+    command: /data --allow-upload --allow-delete --allow-search --auth "admin:${UPLOAD_PASS}@/:rw"
+
+  # Fills in missing tags from the folder layout. Navidrome reads tags only,
+  # so without this, hand-uploaded files show up as Unknown Artist.
+  tagger:
+    image: python:3.12-alpine
+    container_name: music-tagger
+    restart: unless-stopped
+    user: "${PUID}:${PGID}"
+    environment:
+      TAGGER_INTERVAL: "30"
+    volumes:
+      - ./music:/music
+      - ./tagger:/app:ro
+    command: sh -c "pip install --quiet --no-cache-dir --target /tmp/pylibs mutagen && PYTHONPATH=/tmp/pylibs python -u /app/tagger.py"
