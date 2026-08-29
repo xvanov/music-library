@@ -1,0 +1,8 @@
+# One song per line:  Artist - Title
+# Optional album:     Artist - Title :: Album
+# Blank lines and #comments are ignored.
+
+Bijelo Dugme - Djurdjevdan
+Goran Bregovic - Kalasnjikov :: Underground
+Fanfare Ciocarlia - Iag Bari
+Boban Markovic Orkestar - Khelipe E Cheasa

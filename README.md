@@ -48,6 +48,18 @@ mlib approve all                         # tag + publish + rescan
 
 Nothing reaches the library until you `approve` it.
 
+### Already know what you want?
+
+```bash
+mlib batch songs.txt --dry-run
+mlib batch songs.txt
+```
+
+A text file of `Artist - Title` lines (see `examples/songs.txt`). Resolves each
+one by string similarity and duration, in parallel, with **no model and no
+tokens**. Anything it cannot match confidently is listed for you rather than
+guessed at.
+
 ### Let a model do the picking
 
 ```bash

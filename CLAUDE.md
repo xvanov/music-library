@@ -67,6 +67,25 @@ Nothing in `staging/` is in the library. Nothing leaves `staging/` without
 `approve`. Deletes go through `mlib rm`, and Navidrome purges the DB row on the
 next scan (`ND_SCANNER_PURGEMISSING: always`).
 
+## `mlib batch` — a known list, zero tokens
+
+When the user already knows artist and title, there is no judgement left to make,
+so **do not send the list to a model**. `mlib batch` resolves each line by string
+similarity and duration sanity:
+
+```bash
+mlib batch songs.txt --dry-run     # show what it matched, download nothing
+mlib batch songs.txt               # stage the confident matches
+```
+
+Input is one `Artist - Title` per line, optionally `:: Album`. Anything scoring
+below `--threshold` (default 0.62) is **reported, not guessed at** — the point is
+that a bad match is worse than no match, since a wrong file is tedious to find
+and remove later.
+
+Forty songs costs nothing and takes one command. Reach for `auto` only when the
+request is a description rather than a list.
+
 ## `mlib auto` — the one-shot LLM path
 
 ```bash

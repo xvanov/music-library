@@ -6,7 +6,7 @@ candidates freely and a human still decides what lands.
 import argparse
 import sys
 
-from . import agent, fetch, navidrome, store, tag
+from . import agent, batch, fetch, navidrome, store, tag
 from .config import STAGING, cfg
 from .naming import clean, relpath, split_artist_title
 
@@ -273,6 +273,83 @@ def cmd_auto(args):
     return 0
 
 
+def cmd_batch(args):
+    """Fetch a known list of songs. Deterministic - no model, no tokens."""
+    from pathlib import Path as _Path
+
+    text = _Path(args.file).read_text(encoding="utf-8")
+    entries, bad = batch.parse_list(text)
+    if bad:
+        print("skipping {} unparseable line(s); expected 'Artist - Title':".format(len(bad)))
+        for line in bad[:5]:
+            print("  " + line)
+    if not entries:
+        print("nothing to do")
+        return 1
+    if args.album:
+        for e in entries:
+            e["album"] = args.album
+
+    print("resolving {} track(s), {} at a time (no tokens used)".format(len(entries), args.jobs))
+    done = [0]
+
+    def progress(entry, confidence, candidate):
+        done[0] += 1
+        mark = "ok " if confidence >= args.threshold else "?? "
+        print("  [{}/{}] {}{} - {}  ({:.2f})".format(
+            done[0], len(entries), mark, entry["artist"], entry["title"], confidence))
+
+    results = batch.resolve_all(entries, pool=args.pool, jobs=args.jobs, progress=progress)
+
+    confident = [(e, c, cand) for e, c, cand in results if cand and c >= args.threshold]
+    unsure = [(e, c, cand) for e, c, cand in results if not cand or c < args.threshold]
+
+    if args.dry_run:
+        print("\nwould stage {} track(s):".format(len(confident)))
+        for entry, confidence, candidate in confident:
+            print("  {}  <- {}".format(
+                relpath(entry["artist"], entry["album"], entry["title"]),
+                candidate["raw_title"]))
+        _report_unsure(unsure)
+        print("\n(dry run - nothing downloaded)")
+        return 0
+
+    staged = 0
+    for entry, confidence, candidate in confident:
+        target = relpath(entry["artist"], entry["album"], entry["title"])
+        if store.exists(target):
+            print("skip (already in library): " + target)
+            continue
+        try:
+            path, _info = fetch.download(candidate["url"])
+        except Exception as exc:
+            print("download failed for {} - {}: {}".format(entry["artist"], entry["title"], exc))
+            continue
+        fetch.write_sidecar(path, {
+            "artist": entry["artist"],
+            "album": entry["album"],
+            "title": entry["title"],
+            "track": None,
+            "source": candidate["url"],
+        })
+        staged += 1
+
+    print("\nstaged {} track(s). review with `mlib staged`, then `mlib approve`".format(staged))
+    _report_unsure(unsure)
+    return 0
+
+
+def _report_unsure(unsure):
+    if not unsure:
+        return
+    print("\n{} needed a closer look - not staged:".format(len(unsure)))
+    for entry, confidence, candidate in unsure:
+        detail = candidate["raw_title"] if candidate else "no usable result"
+        print("  {} - {}  ({:.2f})  best was: {}".format(
+            entry["artist"], entry["title"], confidence, detail))
+    print("stage one by hand with:  mlib add <url> --artist ... --title ...")
+
+
 # -- wiring --------------------------------------------------------------
 
 
@@ -304,6 +381,15 @@ def build_parser():
     au.add_argument("--backend", help="LLM CLI to use (default: codex, then claude)")
     au.add_argument("--dry-run", action="store_true", help="filter only, no model call")
     au.set_defaults(func=cmd_auto)
+
+    ba = sub.add_parser("batch", help="fetch a known list of songs (no model, no tokens)")
+    ba.add_argument("file", help="text file, one 'Artist - Title' per line, '# comment' ok")
+    ba.add_argument("--album", help="album for every entry (default: per-line, else Singles)")
+    ba.add_argument("--threshold", type=float, default=0.62, help="match confidence 0-1")
+    ba.add_argument("--pool", type=int, default=5, help="results to consider per song")
+    ba.add_argument("--jobs", type=int, default=4, help="parallel searches")
+    ba.add_argument("--dry-run", action="store_true", help="show matches, download nothing")
+    ba.set_defaults(func=cmd_batch)
 
     sub.add_parser("staged", help="list what is waiting for approval").set_defaults(
         func=cmd_staged
