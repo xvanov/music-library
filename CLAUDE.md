@@ -67,7 +67,33 @@ Nothing in `staging/` is in the library. Nothing leaves `staging/` without
 `approve`. Deletes go through `mlib rm`, and Navidrome purges the DB row on the
 next scan (`ND_SCANNER_PURGEMISSING: always`).
 
-## Running as an agent
+## `mlib auto` — the one-shot LLM path
+
+```bash
+mlib auto "balkan brass bands, single songs only" --limit 3
+mlib auto "..." --dry-run     # filtering only, no model call, costs nothing
+```
+
+Pipeline: yt-dlp search (free) -> deterministic prefilter (free) -> **one** model
+call returning JSON -> download to staging. It never publishes; `approve` is
+still yours.
+
+Token discipline matters here because this runs on a $20 ChatGPT plan:
+
+- The prefilter in `mlib/agent.py` drops anything outside 60-600s and anything
+  matching `REJECT` (full albums, mixes, live sets, reactions). Rejecting a
+  62-minute compilation costs zero tokens; asking a model about it does not.
+- Only ~15 shortlisted candidates are sent, one line each (~470 tokens).
+- Codex bills its own harness overhead (~4k tokens) per invocation regardless of
+  prompt size, so **one call per request** is the whole game. Never loop the model
+  over candidates one at a time.
+- `_run_backend` runs Codex with `--cd` into an empty temp dir so it does not read
+  this repo's files into context, and `--output-schema` pins the reply shape.
+
+Backend is `MLIB_LLM_CMD` (default: `codex`, then `claude`). Any CLI that reads a
+prompt on stdin and prints text works.
+
+## Running as an agent (interactively)
 
 When asked to find music, work in this order:
 

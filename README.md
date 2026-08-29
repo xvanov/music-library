@@ -48,6 +48,21 @@ mlib approve all                         # tag + publish + rescan
 
 Nothing reaches the library until you `approve` it.
 
+### Let a model do the picking
+
+```bash
+mlib auto "balkan brass bands, single songs only" --limit 3
+```
+
+Searches, throws away the obvious junk for free, then makes **one** call to a
+local LLM CLI to pick real songs and fill in artist/album/title. Downloads to
+staging; you still approve.
+
+Requires [Codex CLI](https://developers.openai.com/codex/) (`npm i -g @openai/codex`,
+then `codex login`). It signs in with a ChatGPT plan, so Plus at $20/month covers
+it with no API key. Roughly 5k tokens per run, nearly all of it Codex's own
+harness overhead. Use `--dry-run` to see the filtered shortlist for free.
+
 ### Other commands
 
 | Command | Does |

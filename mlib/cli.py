@@ -6,7 +6,7 @@ candidates freely and a human still decides what lands.
 import argparse
 import sys
 
-from . import fetch, navidrome, store, tag
+from . import agent, fetch, navidrome, store, tag
 from .config import STAGING, cfg
 from .naming import clean, relpath, split_artist_title
 
@@ -209,6 +209,70 @@ def cmd_scan(args):
     return 0
 
 
+def cmd_auto(args):
+    """Search, let the model pick real songs, stage them. Never publishes."""
+    print("searching: {}".format(args.request))
+    candidates = fetch.search(args.request, limit=args.pool)
+    if not candidates:
+        print("no results")
+        return 1
+
+    est, kept = agent.estimate_tokens(args.request, candidates, limit=args.limit)
+    print("{} results -> {} after filtering (~{} prompt tokens)".format(
+        len(candidates), kept, est))
+    if kept == 0:
+        print("nothing survived the filter; try a more specific request")
+        return 1
+
+    if args.dry_run:
+        for c in agent.prefilter(candidates):
+            print("  {}  {}".format(_fmt_duration(c["duration"]), c["raw_title"]))
+        print("\n(dry run - no model call, nothing downloaded)")
+        return 0
+
+    picks = agent.choose(
+        args.request, candidates, limit=args.limit, backend=args.backend
+    )
+    if not picks:
+        print("model picked nothing")
+        return 1
+
+    staged = 0
+    for candidate, meta in picks:
+        artist = clean(meta["artist"])
+        title = clean(meta["title"])
+        album = clean(meta["album"]) or "Singles"
+        if not artist or not title:
+            print("skip (incomplete metadata): {}".format(candidate["raw_title"]))
+            continue
+
+        target = relpath(artist, album, title)
+        if store.exists(target):
+            print("skip (already in library): {}".format(target))
+            continue
+
+        print("downloading: {} - {}".format(artist, title))
+        try:
+            path, _info = fetch.download(candidate["url"])
+        except Exception as exc:
+            print("  failed: {}".format(exc))
+            continue
+        fetch.write_sidecar(
+            path,
+            {
+                "artist": artist,
+                "album": album,
+                "title": title,
+                "track": None,
+                "source": candidate["url"],
+            },
+        )
+        staged += 1
+
+    print("\nstaged {} track(s). review with `mlib staged`, then `mlib approve`".format(staged))
+    return 0
+
+
 # -- wiring --------------------------------------------------------------
 
 
@@ -232,6 +296,14 @@ def build_parser():
     a.add_argument("--title")
     a.add_argument("--track", type=int)
     a.set_defaults(func=cmd_add)
+
+    au = sub.add_parser("auto", help="describe what you want; the model picks songs")
+    au.add_argument("request")
+    au.add_argument("--limit", type=int, default=5, help="max tracks to stage")
+    au.add_argument("--pool", type=int, default=25, help="how many results to search")
+    au.add_argument("--backend", help="LLM CLI to use (default: codex, then claude)")
+    au.add_argument("--dry-run", action="store_true", help="filter only, no model call")
+    au.set_defaults(func=cmd_auto)
 
     sub.add_parser("staged", help="list what is waiting for approval").set_defaults(
         func=cmd_staged
