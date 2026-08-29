@@ -32,9 +32,9 @@ It only fills empty fields, so tags you set by hand always win.
 ```bash
 git clone git@github.com:xvanov/music-library.git
 cd music-library
-pip install -r requirements.txt
+pip install -e .            # installs the `mlib` command
 cp .env.example .env        # fill in your server address and credentials
-python -m mlib status
+mlib status
 ```
 
 Then:

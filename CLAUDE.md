@@ -102,10 +102,13 @@ not resolve on every client (it fails on the Windows box).
 
 ## Setup
 
+`mlib` is a console entry point from `pyproject.toml`. Without `pip install -e .`
+there is no `mlib` command and you must fall back to `python -m mlib`.
+
 ```bash
 cp .env.example .env      # then fill it in; .env is gitignored
-pip install -r requirements.txt
-python -m mlib status
+pip install -e .          # installs the `mlib` console command
+mlib status
 ```
 
 Server-side, see `server/` — `docker-compose.yml` plus the tagger. Deploy with

@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mlib"
+version = "0.1.0"
+description = "Search, tag and publish tracks to a self-hosted Navidrome library"
+requires-python = ">=3.9"
+dependencies = [
+    "yt-dlp>=2026.1.1",
+    "mutagen>=1.47.0",
+    "requests>=2.32.0",
+]
+
+[project.scripts]
+mlib = "mlib.cli:main"
+
+[tool.setuptools]
+packages = ["mlib"]
