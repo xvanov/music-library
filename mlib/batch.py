@@ -106,6 +106,18 @@ def score(entry, candidate):
 
     ratio = difflib.SequenceMatcher(None, wanted, haystack).ratio()
 
+    # Sequence ratio punishes candidates that carry extra words - bilingual
+    # titles, parentheticals, orchestra credits - even when every word of the
+    # query is present. Token coverage does not, so take the better of the two.
+    # Coverage is measured against the title alone. Including the channel let a
+    # submarine documentary on "Подводный флот России" cover the query "Флот
+    # Комсомол" completely and score 0.95.
+    q_tokens = set(wanted.split())
+    title_tokens = set(normalize(cand_title).split())
+    if q_tokens:
+        coverage = len(q_tokens & title_tokens) / len(q_tokens)
+        ratio = max(ratio, coverage * 0.95)
+
     # Require the title itself to be present; artist often lives in the channel.
     title_norm = normalize(entry["title"])
     if title_norm and title_norm in haystack:

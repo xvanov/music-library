@@ -74,6 +74,37 @@ def test_scrub_keeps_leading_year():
     assert scrub("1984 Overture") == "1984 Overture"
 
 
+def test_coverage_ignores_channel_name():
+    from mlib.batch import score
+    # The channel "Подводный флот России" once supplied the missing word for the
+    # query "Флот Комсомол", scoring a submarine documentary at 0.95.
+    entry = {"artist": None, "title": "Флот Комсомол", "raw": "x", "album": "Singles"}
+    doc = {
+        "raw_title": "Легендарная субмарина Ленинский комсомол вышла в поход",
+        "channel": "Russian Submarine Fleet - Подводный флот России",
+        "duration": 200,
+    }
+    assert score(entry, doc) < 0.6
+
+
+def test_coverage_rescues_verbose_titles():
+    from mlib.batch import score
+    # Bilingual and parenthesised titles carry extra words; sequence ratio alone
+    # rated these correct matches below threshold.
+    entry = {
+        "artist": None,
+        "title": "Вход Красной Армии в Будапешт",
+        "raw": "x",
+        "album": "Singles",
+    }
+    good = {
+        "raw_title": 'Марш "Вступление Красной Армии в Будапешт" (Семён Чернецкий)',
+        "channel": "",
+        "duration": 200,
+    }
+    assert score(entry, good) > 0.62
+
+
 if __name__ == "__main__":
     import traceback
     failures = 0
