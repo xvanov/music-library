@@ -78,7 +78,23 @@ mlib batch songs.txt --dry-run     # show what it matched, download nothing
 mlib batch songs.txt               # stage the confident matches
 ```
 
-Input is one `Artist - Title` per line, optionally `:: Album`. Anything scoring
+Input is one `Artist - Title` per line, optionally `:: Album`. A **bare title**
+also works - list decoration (`1.`, `-`, `*`, quotes, brackets) is stripped, and
+the missing artists are then resolved for the whole list in **one** batched model
+call (`--no-assist` to skip it, `--dry-run` to preview first).
+
+Two things to watch when using bare titles:
+
+- Attribution describes *what was matched*, not what you meant. If the search
+  lands on a different song with a similar name, the model will faithfully
+  identify that other song. Always `--dry-run` a bare-title list and read the
+  right-hand column.
+- The real title replaces yours, so "Djurdjevdan" becomes
+  "Đurđevdan je, a ja nisam s onom koju volim". That is usually what you want,
+  but it is a rename.
+
+Adding the artist to a line (`Goran Bregovic - Mesecina`) removes both risks and
+costs nothing. Anything scoring
 below `--threshold` (default 0.62) is **reported, not guessed at** — the point is
 that a bad match is worse than no match, since a wrong file is tedious to find
 and remove later.

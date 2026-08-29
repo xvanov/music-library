@@ -55,7 +55,11 @@ mlib batch songs.txt --dry-run
 mlib batch songs.txt
 ```
 
-A text file of `Artist - Title` lines (see `examples/songs.txt`). Resolves each
+A text file of `Artist - Title` lines, or just bare titles with whatever
+decoration they came with - `1.`, bullets, quotes and brackets are stripped
+(see `examples/songs.txt`). Bare titles get their artist and album filled in by
+a single batched model call; use `--no-assist` to stay at zero tokens, and
+`--dry-run` to check the matches before downloading. Resolves each
 one by string similarity and duration, in parallel, with **no model and no
 tokens**. Anything it cannot match confidently is listed for you rather than
 guessed at.

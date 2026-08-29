@@ -126,7 +126,7 @@ def _resolve(exe):
     return found
 
 
-def _run_backend(cmd, prompt, timeout=180):
+def _run_backend(cmd, prompt, timeout=180, schema=None, key="picks"):
     """Invoke the CLI non-interactively and return its final message."""
     parts = cmd.split()
     exe = parts[0]
@@ -150,7 +150,7 @@ def _run_backend(cmd, prompt, timeout=180):
         schema_path = os.path.join(workdir, "schema.json")
         answer_path = os.path.join(workdir, "answer.json")
         with open(schema_path, "w", encoding="utf-8") as fh:
-            json.dump(SCHEMA, fh)
+            json.dump(schema or SCHEMA, fh)
 
         argv = parts + [
             "exec",
@@ -174,7 +174,7 @@ def _run_backend(cmd, prompt, timeout=180):
         return proc.stdout
 
 
-def _extract_json(text):
+def _extract_json(text, key="picks"):
     """Pull the JSON object out of whatever framing the CLI wrapped it in."""
     text = re.sub(r"```(?:json)?", "", text)
     depth = 0
@@ -193,10 +193,10 @@ def _extract_json(text):
                 except json.JSONDecodeError:
                     start = None
                     continue
-                if isinstance(parsed, dict) and "picks" in parsed:
+                if isinstance(parsed, dict) and key in parsed:
                     return parsed
                 start = None
-    raise AgentError("no JSON object with a 'picks' key in the model output")
+    raise AgentError("no JSON object with a '{}' key in the model output".format(key))
 
 
 def choose(request, candidates, limit=5, backend=None, timeout=180):
@@ -238,3 +238,82 @@ def estimate_tokens(request, candidates, limit=5):
     shortlist = prefilter(candidates)
     prompt = PROMPT.format(request=request, candidates=_render(shortlist), limit=limit)
     return len(prompt) // 4, len(shortlist)
+
+
+ATTRIBUTE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "tracks": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "i": {"type": "integer"},
+                    "artist": {"type": "string"},
+                    "album": {"type": "string"},
+                    "title": {"type": "string"},
+                },
+                "required": ["i", "artist", "album", "title"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["tracks"],
+    "additionalProperties": False,
+}
+
+ATTRIBUTE_PROMPT = """For each numbered row, identify the song.
+
+Each row is: index|what the user asked for|the search result that matched|channel
+
+Rows:
+{rows}
+
+For every row return:
+- artist: the performing artist. NOT the channel name unless they are the artist.
+- album: the studio album the song is from, or "Singles" if you are unsure.
+- title: the clean song title, no "(Official Video)", no featured-artist suffix.
+
+Return one entry per row, keeping the same index. Never skip a row."""
+
+
+def attribute(rows, backend=None, timeout=300):
+    """Fill in artist/album/title for many tracks in a single call.
+
+    One request for the whole list: Codex bills several thousand tokens of
+    harness overhead per invocation, so batching is what keeps this affordable.
+    """
+    if not rows:
+        return {}
+    backend = backend or default_backend()
+    if not backend:
+        raise AgentError("no LLM CLI found; install codex or set MLIB_LLM_CMD")
+
+    rendered = "\n".join(
+        "{}|{}|{}|{}".format(r["i"], r["asked"], r["matched"], r.get("channel") or "")
+        for r in rows
+    )
+    prompt = ATTRIBUTE_PROMPT.format(rows=rendered)
+    raw = _run_backend(backend, prompt, timeout=timeout, schema=ATTRIBUTE_SCHEMA, key="tracks")
+    data = _extract_json(raw, key="tracks")
+
+    out = {}
+    for item in data.get("tracks", []):
+        try:
+            idx = int(item["i"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        out[idx] = {
+            "artist": (item.get("artist") or "").strip(),
+            "album": (item.get("album") or "Singles").strip() or "Singles",
+            "title": (item.get("title") or "").strip(),
+        }
+    return out
+
+
+def estimate_attribute_tokens(rows):
+    rendered = "\n".join(
+        "{}|{}|{}|{}".format(r["i"], r["asked"], r["matched"], r.get("channel") or "")
+        for r in rows
+    )
+    return len(ATTRIBUTE_PROMPT.format(rows=rendered)) // 4

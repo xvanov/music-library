@@ -304,6 +304,36 @@ def cmd_batch(args):
     confident = [(e, c, cand) for e, c, cand in results if cand and c >= args.threshold]
     unsure = [(e, c, cand) for e, c, cand in results if not cand or c < args.threshold]
 
+    # Bare titles carry no artist. One batched call fills them all in; without it
+    # we fall back to whatever the source metadata suggests.
+    needs = [(i, e, cand) for i, (e, c, cand) in enumerate(confident) if not e.get("artist")]
+    if needs and not args.no_assist:
+        rows = [
+            {"i": i, "asked": e["raw"], "matched": cand["raw_title"], "channel": cand.get("channel")}
+            for i, e, cand in needs
+        ]
+        est = agent.estimate_attribute_tokens(rows)
+        print("\n{} title(s) have no artist - resolving in ONE call (~{} prompt tokens)".format(
+            len(rows), est))
+        try:
+            filled = agent.attribute(rows, backend=args.backend)
+            for i, entry, _cand in needs:
+                got = filled.get(i)
+                if not got or not got.get("artist"):
+                    continue
+                entry["artist"] = got["artist"]
+                if entry["album"] == "Singles" and got.get("album"):
+                    entry["album"] = got["album"]
+                if got.get("title"):
+                    entry["title"] = got["title"]
+        except Exception as exc:
+            print("attribution failed ({}); falling back to source metadata".format(exc))
+
+    for _i, entry, cand in needs:
+        if not entry.get("artist"):
+            guessed, _t = split_artist_title(cand["raw_title"])
+            entry["artist"] = clean(guessed or cand.get("channel") or "Unknown Artist")
+
     if args.dry_run:
         print("\nwould stage {} track(s):".format(len(confident)))
         for entry, confidence, candidate in confident:
@@ -389,6 +419,9 @@ def build_parser():
     ba.add_argument("--pool", type=int, default=5, help="results to consider per song")
     ba.add_argument("--jobs", type=int, default=4, help="parallel searches")
     ba.add_argument("--dry-run", action="store_true", help="show matches, download nothing")
+    ba.add_argument("--no-assist", action="store_true",
+                    help="do not call a model to fill in missing artists")
+    ba.add_argument("--backend", help="LLM CLI for artist lookup (default: codex, then claude)")
     ba.set_defaults(func=cmd_batch)
 
     sub.add_parser("staged", help="list what is waiting for approval").set_defaults(

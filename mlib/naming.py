@@ -18,11 +18,16 @@ _NOISE = re.compile(
 _SPLIT = re.compile(r"\s+[-–—]\s+")
 
 
+# YouTube auto-generated artist channels are named "<Artist> - Topic".
+_TOPIC = re.compile(r"\s+-\s+Topic$", re.I)
+
+
 def clean(text, keep_case=True):
     """Normalize a title/artist string pulled from a source that is often messy."""
     if not text:
         return ""
     text = unicodedata.normalize("NFC", str(text))
+    text = _TOPIC.sub("", text)
     text = _NOISE.sub(" ", text)
     text = text.replace("_", " ")
     text = re.sub(r"\s+", " ", text).strip(" .-")

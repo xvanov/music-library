@@ -19,6 +19,20 @@ VARIANT = re.compile(r"\b(live|cover|remix|karaoke|instrumental|acoustic|sped up
 # A line looks like:  Artist - Title            (optionally  ... :: Album)
 LINE = re.compile(r"^\s*(?P<body>.+?)\s*(?:::\s*(?P<album>.+?))?\s*$")
 
+# Leading list junk: "1.", "1)", "-", "*", bullets, and stray quotes/brackets.
+LEAD = re.compile(r"^[\s\d]*[\.\)\-\*•–—:]*\s*")
+TRAIL = re.compile(r"[\s\-–—_,;:|]+$")
+WRAP = re.compile(r"^[\[\(\{\'\"“‘\s]+|[\]\)\}\'\"”’\s]+$")
+
+
+def scrub(line):
+    """Strip list decoration and stray wrapping characters from a raw line."""
+    text = line.strip()
+    text = LEAD.sub("", text)
+    text = WRAP.sub("", text)
+    text = TRAIL.sub("", text)
+    return re.sub(r"\s+", " ", text).strip()
+
 
 def normalize(text):
     text = unicodedata.normalize("NFKD", (text or "").lower())
@@ -27,24 +41,33 @@ def normalize(text):
 
 
 def parse_list(text):
-    """Parse a song list. Returns (entries, bad_lines)."""
+    """Parse a song list. Returns (entries, bad_lines).
+
+    Accepts "Artist - Title", or a bare title with whatever decoration came with
+    it. A bare title leaves artist as None, to be filled in later from the match.
+    """
     entries, bad = [], []
     for raw in text.splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
         m = LINE.match(line)
-        body = m.group("body")
+        body = scrub(m.group("body"))
         album = (m.group("album") or "").strip()
-
-        parts = re.split(r"\s+[-–—]\s+", body, maxsplit=1)
-        if len(parts) != 2 or not parts[0].strip() or not parts[1].strip():
+        if not body:
             bad.append(raw)
             continue
+
+        parts = re.split(r"\s+[-–—]\s+", body, maxsplit=1)
+        if len(parts) == 2 and parts[0].strip() and parts[1].strip():
+            artist, title = parts[0].strip(), parts[1].strip()
+        else:
+            artist, title = None, body
+
         entries.append(
             {
-                "artist": parts[0].strip(),
-                "title": parts[1].strip(),
+                "artist": artist,
+                "title": title,
                 "album": album or "Singles",
                 "raw": line,
             }
@@ -61,7 +84,7 @@ def score(entry, candidate):
     if REJECT.search(cand_title):
         return 0.0
 
-    wanted = normalize(entry["artist"] + " " + entry["title"])
+    wanted = normalize(" ".join(filter(None, (entry.get("artist"), entry["title"]))))
     haystack = normalize(cand_title + " " + (candidate.get("channel") or ""))
 
     ratio = difflib.SequenceMatcher(None, wanted, haystack).ratio()
@@ -70,7 +93,7 @@ def score(entry, candidate):
     title_norm = normalize(entry["title"])
     if title_norm and title_norm in haystack:
         ratio = max(ratio, 0.72)
-    artist_norm = normalize(entry["artist"])
+    artist_norm = normalize(entry.get("artist") or "")
     if artist_norm and artist_norm in haystack:
         ratio += 0.10
 
@@ -82,7 +105,7 @@ def score(entry, candidate):
 
 
 def best_match(entry, pool=5):
-    query = "{} {}".format(entry["artist"], entry["title"])
+    query = " ".join(filter(None, (entry.get("artist"), entry["title"])))
     candidates = fetch.search(query, limit=pool)
     ranked = sorted(
         ((score(entry, c), c) for c in candidates), key=lambda pair: pair[0], reverse=True
