@@ -34,9 +34,15 @@ def clean(text, keep_case=True):
     return text if keep_case else text.lower()
 
 
+# Unbalanced quotes are common in scraped titles. Drop them rather than let
+# _ILLEGAL turn them into stray dashes.
+_QUOTES = re.compile(r"[\"“”‘’«»]")
+
+
 def safe(component):
     """Make one path component safe to write on any filesystem."""
-    component = _ILLEGAL.sub("-", clean(component))
+    component = _QUOTES.sub("", clean(component))
+    component = _ILLEGAL.sub("-", component)
     component = component.strip(" .")
     return (component or "Unknown")[:120]
 

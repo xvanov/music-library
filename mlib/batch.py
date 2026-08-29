@@ -19,25 +19,42 @@ VARIANT = re.compile(r"\b(live|cover|remix|karaoke|instrumental|acoustic|sped up
 # A line looks like:  Artist - Title            (optionally  ... :: Album)
 LINE = re.compile(r"^\s*(?P<body>.+?)\s*(?:::\s*(?P<album>.+?))?\s*$")
 
-# Leading list junk: "1.", "1)", "-", "*", bullets, and stray quotes/brackets.
-LEAD = re.compile(r"^[\s\d]*[\.\)\-\*•–—:]*\s*")
-TRAIL = re.compile(r"[\s\-–—_,;:|]+$")
-WRAP = re.compile(r"^[\[\(\{\'\"“‘\s]+|[\]\)\}\'\"”’\s]+$")
+# Chapter timestamps ("0:00 ", "1:02:33 - ") lead every line of a tracklist
+# copied out of a video description.
+TIMESTAMP = re.compile(r"^\s*\d{1,2}:\d{2}(?::\d{2})?\s*[-–—.)\]]?\s*")
+
+# List decoration: "1.", "12)", "-", "*", bullets. Only a number that is
+# followed by a separator counts, so a title starting with a year survives.
+LEAD = re.compile(r"^\s*(?:\d{1,3}\s*[\.\)\-–—:]\s+|[-*•–—]\s+)")
+
+# Trailing junk. "!" and "?" stay - they are often part of the title.
+TRAIL = re.compile(r"[\s\.,;:|_\-–—]+$")
+
+WRAP_OPEN = re.compile(r"^[\[\(\{'\"“‘\s]+")
+WRAP_CLOSE = re.compile(r"[\]\)\}'\"”’\s]+$")
 
 
 def scrub(line):
-    """Strip list decoration and stray wrapping characters from a raw line."""
+    """Strip timestamps, list decoration and stray wrapping from a raw line."""
     text = line.strip()
+    text = TIMESTAMP.sub("", text)
     text = LEAD.sub("", text)
-    text = WRAP.sub("", text)
+    text = WRAP_OPEN.sub("", text)
+    text = WRAP_CLOSE.sub("", text)
     text = TRAIL.sub("", text)
     return re.sub(r"\s+", " ", text).strip()
 
 
 def normalize(text):
-    text = unicodedata.normalize("NFKD", (text or "").lower())
+    """Casefold and drop punctuation, but keep non-Latin scripts intact.
+
+    Stripping to [a-z0-9] erases Cyrillic, Greek and CJK entirely, which made
+    every such title normalize to "" and score meaninglessly.
+    """
+    text = unicodedata.normalize("NFKD", (text or "").casefold())
     text = "".join(ch for ch in text if not unicodedata.combining(ch))
-    return re.sub(r"[^a-z0-9]+", " ", text).strip()
+    text = "".join(ch if (ch.isalnum() or ch.isspace()) else " " for ch in text)
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def parse_list(text):
@@ -104,25 +121,33 @@ def score(entry, candidate):
     return max(0.0, min(ratio, 1.0))
 
 
-def best_match(entry, pool=5):
+def best_match(entry, pool=5, keep=4):
+    """Best candidate, plus runners-up to fall back on if a download fails.
+
+    Sources go missing or turn out to be age-gated, so a single URL per song is
+    not enough - keep the next best few and try them in turn.
+    """
     query = " ".join(filter(None, (entry.get("artist"), entry["title"])))
     candidates = fetch.search(query, limit=pool)
     ranked = sorted(
         ((score(entry, c), c) for c in candidates), key=lambda pair: pair[0], reverse=True
     )
-    if not ranked or ranked[0][0] <= 0:
+    ranked = [(sc, c) for sc, c in ranked if sc > 0]
+    if not ranked:
+        entry["_alternates"] = []
         return 0.0, None
+    entry["_alternates"] = [c for _sc, c in ranked[1:keep]]
     return ranked[0]
 
 
-def resolve_all(entries, pool=5, jobs=4, progress=None):
+def resolve_all(entries, pool=5, jobs=4, progress=None, keep=4):
     """Search every entry concurrently. Returns [(entry, confidence, candidate)]."""
     results = [None] * len(entries)
 
     def work(index):
         entry = entries[index]
         try:
-            confidence, candidate = best_match(entry, pool=pool)
+            confidence, candidate = best_match(entry, pool=pool, keep=keep)
         except Exception as exc:
             confidence, candidate = 0.0, None
             entry["error"] = str(exc)

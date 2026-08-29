@@ -36,6 +36,44 @@ def test_split_artist_title():
     assert split_artist_title("JustATitle") == (None, "JustATitle")
 
 
+def test_normalize_keeps_non_latin_scripts():
+    from mlib.batch import normalize
+    # Stripping to [a-z0-9] used to erase these entirely, so every Cyrillic
+    # title normalized to "" and scored meaninglessly against candidates.
+    assert normalize("Прощание славянки") == "прощание славянки"
+    assert normalize("Djurdjevdan!") == "djurdjevdan"
+
+
+def test_score_discriminates_cyrillic():
+    from mlib.batch import score
+    entry = {"artist": None, "title": "Прощание славянки", "raw": "x", "album": "Singles"}
+    good = {"raw_title": "Прощание славянки 1941", "channel": "Оркестр", "duration": 200}
+    bad = {"raw_title": "Katyusha Red Army Choir", "channel": "Music", "duration": 200}
+    assert score(entry, good) > 0.6
+    assert score(entry, bad) < 0.2
+
+
+def test_scrub_strips_list_decoration():
+    from mlib.batch import parse_list
+    entries, bad = parse_list('1. Djurdjevdan\n2) "Kalasnjikov"\n- Iag Bari\n')
+    assert not bad
+    assert [e["title"] for e in entries] == ["Djurdjevdan", "Kalasnjikov", "Iag Bari"]
+    assert all(e["artist"] is None for e in entries)
+
+
+def test_scrub_strips_chapter_timestamps():
+    from mlib.batch import scrub
+    # Tracklists copied from a video description lead with chapter timestamps.
+    assert scrub("0:00 Aвимарш СССР.") == "Aвимарш СССР"
+    assert scrub("1:02:33 - Some Song") == "Some Song"
+    assert scrub("4:43 В Путь!") == "В Путь!"
+
+
+def test_scrub_keeps_leading_year():
+    from mlib.batch import scrub
+    assert scrub("1984 Overture") == "1984 Overture"
+
+
 if __name__ == "__main__":
     import traceback
     failures = 0

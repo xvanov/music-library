@@ -299,7 +299,9 @@ def cmd_batch(args):
         print("  [{}/{}] {}{} - {}  ({:.2f})".format(
             done[0], len(entries), mark, entry["artist"], entry["title"], confidence))
 
-    results = batch.resolve_all(entries, pool=args.pool, jobs=args.jobs, progress=progress)
+    results = batch.resolve_all(
+        entries, pool=args.pool, jobs=args.jobs, progress=progress, keep=args.keep
+    )
 
     confident = [(e, c, cand) for e, c, cand in results if cand and c >= args.threshold]
     unsure = [(e, c, cand) for e, c, cand in results if not cand or c < args.threshold]
@@ -350,17 +352,33 @@ def cmd_batch(args):
         if store.exists(target):
             print("skip (already in library): " + target)
             continue
-        try:
-            path, _info = fetch.download(candidate["url"])
-        except Exception as exc:
-            print("download failed for {} - {}: {}".format(entry["artist"], entry["title"], exc))
+        # Sources go missing or turn out to be age-gated, so fall back through
+        # the runners-up for the same song rather than dropping it.
+        sources = [candidate] + (entry.get("_alternates") or [])
+        path = used = None
+        last_error = None
+        for attempt, source in enumerate(sources):
+            try:
+                path, _info = fetch.download(source["url"])
+                used = source
+                if attempt:
+                    print("  used alternate source for {} - {}".format(
+                        entry["artist"], entry["title"]))
+                break
+            except Exception as exc:
+                last_error = exc
+
+        if not path:
+            print("download failed for {} - {} (tried {} source(s)): {}".format(
+                entry["artist"], entry["title"], len(sources), last_error))
             continue
+
         fetch.write_sidecar(path, {
             "artist": entry["artist"],
             "album": entry["album"],
             "title": entry["title"],
             "track": None,
-            "source": candidate["url"],
+            "source": used["url"],
         })
         staged += 1
 
@@ -416,7 +434,9 @@ def build_parser():
     ba.add_argument("file", help="text file, one 'Artist - Title' per line, '# comment' ok")
     ba.add_argument("--album", help="album for every entry (default: per-line, else Singles)")
     ba.add_argument("--threshold", type=float, default=0.62, help="match confidence 0-1")
-    ba.add_argument("--pool", type=int, default=5, help="results to consider per song")
+    ba.add_argument("--pool", type=int, default=6, help="results to consider per song")
+    ba.add_argument("--keep", type=int, default=4,
+                    help="fallback sources to try if a download fails")
     ba.add_argument("--jobs", type=int, default=4, help="parallel searches")
     ba.add_argument("--dry-run", action="store_true", help="show matches, download nothing")
     ba.add_argument("--no-assist", action="store_true",
