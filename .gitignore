@@ -6,5 +6,6 @@ __pycache__/
 .venv/
 venv/
 *.egg-info/
-catalog/*.lock
-catalog/*.tmp
+# Your song catalog is personal: it lives in its own (private) git repo,
+# cloned into catalog/. See "Songs vs sources" in CLAUDE.md.
+catalog/

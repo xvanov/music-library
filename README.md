@@ -96,7 +96,9 @@ with `mlib catalog collection "<name>" --lang fr`).
 ### Songs, not files
 
 `catalog/songs.json` keeps the songs you want apart from the recordings that
-supply them, so a bad recording can be replaced and is never picked again:
+supply them, so a bad recording can be replaced and is never picked again.
+It's yours, not the tool's: `catalog/` is gitignored - make it its own private
+repo (`cd catalog && git init`) if you want it backed up.
 
 ```bash
 mlib songs --missing any                          # what still needs finding

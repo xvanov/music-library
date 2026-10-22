@@ -144,6 +144,11 @@ all three, so a song survives its source: when the audio is bad, a better
 recording turns up, or an upload dies, the version is re-sourced, and every
 source ever rejected is remembered and refused.
 
+The catalog is **personal and private**: `catalog/` is gitignored here and is its
+own git repo with a private remote (e.g. `music-catalog`). Commit and push it
+from inside `catalog/` after a session that changed it. Never add `catalog/` or
+any song list to this public repo.
+
 ```bash
 mlib songs --theme jazz --missing vocal      # what still needs finding
 mlib song "Take Five"                        # versions + every source and why it failed
@@ -334,8 +339,8 @@ Server-side, see `server/` — `docker-compose.yml` plus the tagger. Deploy with
 
 - Secrets live in `.env` only. **This repo is public** — never commit a password,
   and keep `server/docker-compose.yml` reading `${UPLOAD_PASS}` from the
-  server-side `.env`. No personal data beyond `catalog/songs.json` (song names
-  and source URLs, which the user is fine publishing).
+  server-side `.env`. No personal data: the song catalog, pick lists and
+  anything naming the owner's library stay out (see the catalog section).
 - `mlib/naming.py` and `server/tagger/tagger.py` must agree on the layout. If you
   change the convention in one, change it in the other.
 - Windows is case-insensitive: two library files differing only in case
