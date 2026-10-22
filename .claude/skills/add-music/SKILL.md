@@ -159,7 +159,19 @@ ones they confirm.
 
 ## Bad audio in a live track
 
-Do not `rm` and re-add - that loses the song's history. Re-source it:
+When the user reports a bad recording ("it has vocals", "sounds wrong", "that's
+a remix"), the song is still wanted - only the source is bad. Default:
+
+```bash
+mlib rm -y "<collection>/<file>.mp3" --bad-source --reason "<what the user said>"
+mlib source find "<title>" <vocal|instrumental>    # then `mlib fill` for a new one
+```
+
+That deletes the file, rejects the source (never picked again) and sets the
+version back to `wanted`. Plain `mlib rm` (version `removed`) is only for "I don't
+want this song at all". Never a bare `rm` and re-add - that loses the history.
+
+To swap in a better recording while the old one stays live until approval:
 
 ```bash
 mlib song "Варяг"                                        # candidates already known?

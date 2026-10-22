@@ -336,14 +336,22 @@ def rejected(cat, meta, reason):
     return sid
 
 
-def removed(cat, path, reason=None):
-    """`rm` deleted a library file. Keeps the history; returns the song id or None."""
+def removed(cat, path, reason=None, bad_source=False):
+    """`rm` deleted a library file. Keeps the history; returns the song id or None.
+
+    Plain rm means the song is not wanted: the version becomes `removed`. With
+    bad_source the recording was the problem: the source is `rejected` (never
+    picked again) and the version goes back to `wanted`, to be found anew."""
     for sid, song in cat["songs"].items():
         for v in song["versions"].values():
             for s in v["sources"]:
                 if s["status"] == "live" and s.get("library_path") == path:
-                    _set(s, "removed", reason or "removed from the library")
-                    v["status"] = "removed"
+                    if bad_source:
+                        _set(s, "rejected", reason or "bad recording")
+                        v["status"] = "wanted"
+                    else:
+                        _set(s, "removed", reason or "removed from the library")
+                        v["status"] = "removed"
                     settle(v)
                     return sid
     return None

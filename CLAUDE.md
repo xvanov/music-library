@@ -65,6 +65,7 @@ mlib approve all                             # tag, publish, trigger rescan
 mlib reject 2                                # discard one
 mlib ls --tracks                             # what is live
 mlib rm "Artist/Album/Song.mp3"              # remove from the library
+mlib rm "..." --bad-source --reason "..."    # bad recording: reject it, want the song again
 ```
 
 `approve` accepts `all`, `2`, or `1,3-4`.
@@ -121,8 +122,13 @@ mlib replace "Катюша" vocal --url <url> --reason "..."     # or a given on
 - `add` records a staged source (refuses one already rejected/replaced/removed
   unless `--anyway`); `approve` makes it live, and for a `replace` publishes the
   new file, deletes the old path and marks the old source `replaced`; `reject
-  [--reason]` marks it `rejected` (default reason: the `check` verdict); `rm
-  [--reason]` marks the version `removed`, keeping its history.
+  [--reason]` marks it `rejected` (default reason: the `check` verdict).
+- Removing a live file — two meanings, pick the right one:
+  - `rm --bad-source --reason "..."` — **the recording is bad** (wrong audio,
+    vocals in an instrumental, a remix). Rejects the source, sets the version back
+    to `wanted`. **The default whenever the user reports a bad recording.**
+  - `rm --reason "..."` — **the song is not wanted** (off-theme). Marks the
+    version `removed`. Both keep the history.
 - `mlib catalog import [--history TSV] [--picks GLOB]` rebuilds/refreshes it from
   the live listing, staging sidecars and pick files. Re-runnable: sources merge by
   id, states only move forward, and it syncs `live`/`staged` with reality.

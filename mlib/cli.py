@@ -271,7 +271,11 @@ def cmd_rm(args):
             return 1
     if store.delete(args.path):
         print("deleted: " + args.path)
-        _catalog_try(lambda cat: catalog.removed(cat, args.path, args.reason))
+        sid = _catalog_try(lambda cat: catalog.removed(cat, args.path, args.reason,
+                                                       bad_source=args.bad_source))
+        if sid and args.bad_source:
+            print("{}: source rejected, version wanted again - `mlib source find` / "
+                  "`mlib fill` to re-source it".format(sid))
         _rescan()
         return 0
     print("not found: " + args.path)
@@ -888,6 +892,9 @@ def build_parser():
     rm.add_argument("path", help="library-relative path, e.g. Artist/Album/Song.mp3")
     rm.add_argument("-y", "--yes", action="store_true")
     rm.add_argument("--reason", help="why, kept in the catalog")
+    rm.add_argument("--bad-source", action="store_true",
+                    help="the recording is bad, not the song: reject the source and "
+                         "mark the version wanted again (default: version removed)")
     rm.set_defaults(func=cmd_rm)
 
     so = sub.add_parser("songs", help="list catalog songs and which versions are live")

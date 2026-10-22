@@ -153,3 +153,17 @@ def test_save_round_trips(tmp_path):
     catalog.save(cat, path)
     assert "Катюша" in path.read_text(encoding="utf-8")
     assert catalog.load(path) == cat
+
+
+def test_rm_bad_source_wants_the_song_again():
+    cat = _empty()
+    meta = {"artist": "Хор", "album": "sov vocal", "title": "Варяг", "source": YT + "v1",
+            "collection": True}
+    catalog.stage(cat, meta)
+    catalog.published(cat, meta, "sov vocal/Хор - Варяг.mp3")
+    assert catalog.removed(cat, "sov vocal/Хор - Варяг.mp3", "has vocals",
+                           bad_source=True) == "sov/варяг"
+    v = cat["songs"]["sov/варяг"]["versions"]["vocal"]
+    assert (v["status"], v["current"], v["library_path"]) == ("wanted", None, None)
+    assert catalog.blocked(cat, YT + "v1")["reason"] == "has vocals"
+    assert catalog.missing(cat["songs"]["sov/варяг"], "vocal")
