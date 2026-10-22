@@ -47,6 +47,7 @@ PAUSE_RATIO = 0.15     # share of 50ms frames that dip, see pause_ratio()
 PAUSE_ONLY = 0.2       # fallback without Whisper: gaps alone
 SAME_RECORDING = 0.6   # chroma similarity -> same recording
 SUB_BASS = 0.4         # share of energy in 20-60 Hz -> electronic production
+VOCALS_WPS = 0.25      # distinct words/s in an *instrumental* -> someone is singing
 MIN_LEN, MAX_LEN = 45, 900
 
 CACHE = Path.home() / ".cache" / "mlib" / "fingerprints"
@@ -193,6 +194,8 @@ def check_files(files, read_meta, write_meta, library=True, progress=print, sett
         dur = len(x) / SR
         fp = fingerprint(x)
         verdict, detail = "ok", ""
+        instrumental = meta.get("version") == "instrumental" or             str(meta.get("album") or "").endswith("instrumental")
+        rate = pauses = None
 
         bass = sub_bass(x)
         if not MIN_LEN <= dur <= MAX_LEN:
@@ -205,6 +208,9 @@ def check_files(files, read_meta, write_meta, library=True, progress=print, sett
                 rate, heard = talk_rate(x, lang=opts.get("lang"))
                 if rate >= SPEECH_WPS or (rate >= TALKY_WPS and pauses >= PAUSE_RATIO):
                     verdict, detail = "speech", "{:.2f} words/s: {}".format(rate, heard)
+                elif instrumental and rate >= VOCALS_WPS:
+                    # A "march" that turned out to be sung, or another piece entirely.
+                    verdict, detail = "vocals", "{:.2f} words/s in an instrumental: {}".format(rate, heard)
             elif pauses >= PAUSE_ONLY:
                 verdict, detail = "speech", "pause pattern looks like talk"
 
@@ -216,7 +222,10 @@ def check_files(files, read_meta, write_meta, library=True, progress=print, sett
                     break
         seen["staged " + path.name] = fp
 
-        meta["check"] = {"verdict": verdict, "detail": detail}
+        meta["check"] = {"verdict": verdict, "detail": detail,
+                         "metrics": {"seconds": round(dur), "sub_bass": round(bass, 3),
+                                     "words_per_s": None if rate is None else round(rate, 2),
+                                     "pauses": None if pauses is None else round(pauses, 3)}}
         write_meta(path, meta)
         results.append((path, verdict, detail))
         progress("  {:9} {}{}".format(verdict, path.name, "  - " + detail if detail else ""))

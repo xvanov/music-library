@@ -108,7 +108,13 @@ files and the whole library. Verdicts are stored in the sidecar; `approve` runs
   `acoustic`: bands, orchestras and choirs sit under 26% (most under 5%); the
   one electronic remix that got through scored 61%. A techno or hip-hop
   collection would be held wholesale, so it is off by default.
+- `vocals` — >= 0.25 distinct words/s in an *instrumental* collection: a "march"
+  that is sung, or another piece under its name. Catches what Whisper can hear;
+  some sung tracks transcribe as nothing, so it is a filter, not a guarantee.
 - `length` — under 45s or over 15min.
+
+Each verdict stores its measurements (`check.metrics` in the sidecar), so a
+borderline call can be revisited without listening again.
 
 **Language.** Whisper's language comes from `--lang`, else the collection's
 setting, else `MLIB_CHECK_LANG`, else auto-detect. Set it for a collection when
@@ -283,11 +289,15 @@ When asked to find music, work in this order:
 3. `mlib add` each keeper with **explicit** `--artist` / `--album` / `--title`
    (or `source find` + `fill`). Do not rely on the auto-guess — source titles are
    full of junk like `(Official Video)` and channel names that are not the artist.
-4. `mlib check`, then `mlib staged`, and **report the list to the user** —
-   including anything held and why. **Stop there.**
-5. Only run `mlib approve` when the user says which ones they want.
+4. `mlib check`, then `mlib staged`.
+5. Publish. **This library's owner has opted in to auto-publish** (2026-10-22):
+   run `mlib approve all` once `check` has run — it publishes what passed and
+   holds the rest — then report what went live and what was held, and why.
+   Without such an opt-in, report the list and stop; approve only what the user
+   picks.
 
-Never approve on your own initiative. Never `mlib rm` without being asked.
+Never `--anyway` a held file and never `mlib rm` without being asked (except
+`rm --bad-source` when the user reports a bad recording).
 
 Match the artist/album naming already in the library (`mlib ls`) so a new track
 joins an existing album instead of creating a near-duplicate.

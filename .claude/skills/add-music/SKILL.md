@@ -115,6 +115,9 @@ It listens to each staged file:
   whole library - same recording = `duplicate`
 - in collections marked `--acoustic`: 40%+ of the energy below 60 Hz =
   `electronic` (a remix, not a band)
+- in an instrumental collection, transcribed words (>= 0.25/s) = `vocals` - a
+  sung "march" or another piece. Whisper hears some singing as nothing, so this
+  is a filter, not a guarantee
 - flags anything under 45s or over 15min = `length`
 
 Flagged files are **held**: `approve` skips them. The first run fingerprints the
@@ -136,11 +139,14 @@ Note what `duplicate` means: the *same recording*. Two different performances of
 one song (a choir and a brass band doing one march) are not duplicates. If the
 user does not want both, that is their call - list them, do not decide.
 
-### 5. Report and stop
+### 5. Publish what passed, report the rest
 
-Run `mlib staged` and give the user a short list: what is ok, what is held and
-why (quote the transcript snippet for `speech` - it is usually obvious, e.g.
-"news report about GTO norms"). **Stop. Do not approve on your own.**
+The owner of this library has opted in to auto-publish: after `mlib check`, run
+`mlib approve all` - it publishes everything that passed and holds the rest.
+Then tell the user what went live (counts per album) and what was held and why
+(quote the transcript snippet for `speech`/`vocals` - it is usually obvious,
+e.g. "news report about GTO norms"). In a library without that opt-in, report
+the list and stop instead; approve only what the user picks.
 
 ### 6. Publish what they choose
 
@@ -198,7 +204,7 @@ the path changed, and marks the old source `replaced` with the reason.
 
 ## Never
 
-- approve, `rm`, or `--anyway` without the user saying so
+- `--anyway` a held file, or plain `rm`, without the user saying so
 - publish a collection without `--collection` (it splits into one album per artist)
 - treat a same-title pair as a duplicate without the fingerprint saying so
 - download in parallel, from any site
