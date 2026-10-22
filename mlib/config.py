@@ -32,6 +32,11 @@ class Config:
     nd_pass = os.environ.get("MLIB_ND_PASS", "")
     audio_format = os.environ.get("MLIB_AUDIO_FORMAT", "mp3")
     audio_quality = os.environ.get("MLIB_AUDIO_QUALITY", "192")
+    # YouTube answers bursts of requests with "confirm you're not a bot"; a
+    # logged-in session gets through. A cookies.txt file, or a browser to read
+    # them from (the browser must be closed - it locks its cookie database).
+    cookies_file = os.environ.get("MLIB_COOKIES") or None
+    cookies_browser = os.environ.get("MLIB_COOKIES_BROWSER") or None
 
     @classmethod
     def mode(cls):

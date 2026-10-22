@@ -11,7 +11,12 @@ dependencies = [
     "yt-dlp>=2026.1.1",
     "mutagen>=1.47.0",
     "requests>=2.32.0",
+    "numpy>=1.26",
 ]
+
+[project.optional-dependencies]
+# speech detection in `mlib check`; without it only plain talk is caught
+check = ["openai-whisper>=20240930"]
 
 [project.scripts]
 mlib = "mlib.cli:main"

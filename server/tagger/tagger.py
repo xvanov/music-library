@@ -3,7 +3,8 @@
 
 Convention (relative to /music):
   <Artist>/<Album>/<Title>.mp3      -> artist, album, title
-  <Album>/<Title>.mp3               -> album = folder, artist from "Artist - Title" or Unknown Artist
+  <Album>/<Title>.mp3               -> album = folder, artist from "Artist - Title" or Unknown Artist,
+                                       albumartist = Various Artists (a collection)
   <Title>.mp3                       -> album = Singles,  artist from "Artist - Title" or Unknown Artist
 
 Filenames may be prefixed with a track number: "03 - Title", "03. Title", "03 Title".
@@ -29,6 +30,7 @@ EXTS = {".mp3", ".m4a", ".mp4", ".flac", ".ogg", ".opus", ".wav", ".aac"}
 
 TRACKNUM = re.compile(r"^\s*(\d{1,3})\s*[-._)]?\s+(.*)$")
 SPLIT = re.compile(r"\s+-\s+")
+VARIOUS = "Various Artists"
 
 
 def clean(s):
@@ -50,11 +52,14 @@ def derive(relpath):
     if m:
         track, stem = int(m.group(1)), m.group(2)
 
-    artist = album = None
+    artist = album = albumartist = None
     if len(dirs) >= 2:
         artist, album = clean(dirs[0]), clean(dirs[1])
         title = clean(stem)
     else:
+        # A folder of "Artist - Title" files is one album of many artists. A shared
+        # albumartist is what stops Navidrome splitting it into one album per artist.
+        albumartist = VARIOUS if dirs else None
         album = clean(dirs[0]) if dirs else "Singles"
         bits = SPLIT.split(stem, maxsplit=1)
         if len(bits) == 2 and bits[0].strip() and bits[1].strip():
@@ -67,6 +72,7 @@ def derive(relpath):
         "album": album or "Singles",
         "title": title or os.path.splitext(parts[-1])[0],
         "tracknumber": str(track) if track else None,
+        "albumartist": albumartist or artist or "Unknown Artist",
     }
 
 
@@ -140,7 +146,7 @@ def process(path):
             changed.append(key)
     # albumartist keeps Navidrome from splitting compilations into one album per track
     if not get(tags, kind, "albumartist"):
-        put(tags, kind, "albumartist", want["artist"])
+        put(tags, kind, "albumartist", want["albumartist"])
         changed.append("albumartist")
 
     if not changed:

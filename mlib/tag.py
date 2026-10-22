@@ -33,9 +33,12 @@ def _open(path):
     raise ValueError(f"unsupported audio format: {ext}")
 
 
-def apply(path, artist=None, album=None, title=None, track=None, albumartist=None, overwrite=True):
+def apply(path, artist=None, album=None, title=None, track=None, albumartist=None, overwrite=True,
+          compilation=False):
     """Set tags on a file. With overwrite=False, only fills fields that are empty."""
     tags, kind = _open(path)
+    if compilation:
+        tags["cpil" if kind == "mp4" else "compilation"] = [True] if kind == "mp4" else ["1"]
     values = {
         "artist": artist,
         "album": album,
@@ -53,6 +56,27 @@ def apply(path, artist=None, album=None, title=None, track=None, albumartist=Non
         written.append(key)
     tags.save()
     return written
+
+
+def wipe(path):
+    """Remove every tag: ID3v1, ID3v2 (comments, TXXX, pictures...), APEv2, Vorbis.
+
+    sovmusic.ru files carry cp1251 text mislabelled as Latin-1; none of it may
+    survive under the tags mlib writes."""
+    import mutagen
+    from mutagen import apev2, id3
+
+    if Path(path).suffix.lower() == ".mp3":
+        id3.delete(path, delete_v1=True, delete_v2=True)
+        apev2.delete(path)
+        return
+    audio = mutagen.File(path)
+    if audio is None:
+        return
+    if hasattr(audio, "clear_pictures"):
+        audio.clear_pictures()
+        audio.save()
+    audio.delete()
 
 
 def read(path):

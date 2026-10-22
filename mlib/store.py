@@ -63,6 +63,18 @@ def put(local_path, relpath):
     return _dav_url(relpath)
 
 
+def get(relpath, local_path):
+    """Copy one library file to `local_path`, for comparing audio against it."""
+    if cfg.mode() == "direct":
+        shutil.copyfile(Path(cfg.music_dir) / relpath, local_path)
+        return local_path
+    r = _dav_session().get(_dav_url(relpath))
+    if r.status_code != 200:
+        raise StoreError(f"GET {relpath} -> {r.status_code}")
+    Path(local_path).write_bytes(r.content)
+    return local_path
+
+
 def delete(relpath):
     mode = cfg.mode()
     if mode == "direct":
@@ -80,17 +92,43 @@ def delete(relpath):
     raise StoreError(f"DELETE {relpath} -> {r.status_code}")
 
 
+AUDIO_EXTS = {".mp3", ".m4a", ".flac", ".ogg", ".opus", ".wav", ".aac"}
+
+
 def listing():
-    """List library-relative audio paths (direct mode only)."""
+    """List library-relative audio paths, from disk or over WebDAV."""
+    if cfg.mode() == "webdav":
+        return sorted(p for p in _dav_walk() if Path(p).suffix.lower() in AUDIO_EXTS)
     if cfg.mode() != "direct":
-        raise StoreError("listing requires direct mode; use `mlib ls` against Navidrome instead")
+        raise StoreError("no destination configured; copy .env.example to .env")
     root = Path(cfg.music_dir)
-    exts = {".mp3", ".m4a", ".flac", ".ogg", ".opus", ".wav", ".aac"}
+    exts = AUDIO_EXTS
     return sorted(
         str(p.relative_to(root)).replace("\\", "/")
         for p in root.rglob("*")
         if p.is_file() and p.suffix.lower() in exts
     )
+
+
+def _dav_walk(rel=""):
+    """Every file path under `rel`, one PROPFIND per folder."""
+    import xml.etree.ElementTree as ET
+    from urllib.parse import unquote, urlparse
+
+    base = urlparse(cfg.dav_url).path.rstrip("/")
+    r = _dav_session().request("PROPFIND", _dav_url(rel).rstrip("/") + "/", headers={"Depth": "1"})
+    if r.status_code not in (200, 207):
+        raise StoreError(f"PROPFIND {rel or '/'} -> {r.status_code}")
+    out = []
+    for resp in ET.fromstring(r.content).findall("{DAV:}response"):
+        href = unquote(urlparse(resp.find("{DAV:}href").text).path)[len(base):].strip("/")
+        if href == rel.strip("/"):
+            continue
+        if resp.find(".//{DAV:}collection") is not None:
+            out += _dav_walk(href)
+        else:
+            out.append(href)
+    return out
 
 
 def _prune_empty(directory):

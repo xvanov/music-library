@@ -3,6 +3,10 @@
 The library layout is  <Artist>/<Album>/<NN - Title>.<ext>  and the server-side
 tagger derives tags from exactly this shape, so both sides must agree. Keep this
 module in sync with server/tagger/tagger.py.
+
+A collection - one album of many artists, like "sov" - is laid out as
+<Album>/<Artist> - <Title>.<ext> and tagged with albumartist VARIOUS, which is
+what keeps Navidrome from splitting it into one album per artist.
 """
 import re
 import unicodedata
@@ -16,6 +20,8 @@ _NOISE = re.compile(
     re.I,
 )
 _SPLIT = re.compile(r"\s+[-–—]\s+")
+
+VARIOUS = "Various Artists"
 
 
 # YouTube auto-generated artist channels are named "<Artist> - Topic".
@@ -56,10 +62,12 @@ def split_artist_title(text):
     return None, text
 
 
-def relpath(artist, album, title, track=None, ext="mp3"):
+def relpath(artist, album, title, track=None, ext="mp3", collection=False):
     """Build the library-relative path for a track."""
     artist = safe(artist or "Unknown Artist")
     album = safe(album or "Singles")
     title = safe(title or "Untitled")
+    if collection:
+        return f"{album}/{safe(artist + ' - ' + title)}.{ext.lstrip('.')}"
     stem = f"{int(track):02d} - {title}" if track else title
     return f"{artist}/{album}/{safe(stem)}.{ext.lstrip('.')}"

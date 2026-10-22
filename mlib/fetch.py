@@ -18,6 +18,10 @@ def _ydl(opts):
         "noprogress": True,
         "ignoreerrors": True,
     }
+    if cfg.cookies_file:
+        base["cookiefile"] = cfg.cookies_file
+    elif cfg.cookies_browser:
+        base["cookiesfrombrowser"] = (cfg.cookies_browser,)
     base.update(opts)
     return YoutubeDL(base)
 

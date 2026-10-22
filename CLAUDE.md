@@ -29,9 +29,14 @@ Layout, relative to the library root:
 
 ```
 <Artist>/<Album>/<NN - Title>.mp3     -> artist, album, track, title
-<Album>/<Artist> - <Title>.mp3        -> album from folder, artist from filename
+<Album>/<Artist> - <Title>.mp3        -> a collection: album from folder, artist from
+                                         filename, albumartist "Various Artists"
 <Artist> - <Title>.mp3                -> album "Singles"
 ```
+
+The shared albumartist is what makes a collection (e.g. `sov`) show as **one**
+album. Without it Navidrome groups by artist and a 50-track collection becomes 50
+albums. Publish collections with `mlib add/batch --collection <album>`.
 
 The tagger **only fills empty fields** — it never overwrites a tag you set. So
 renaming an already-tagged file changes nothing. To force a re-derive, clear the
@@ -55,6 +60,7 @@ mlib status                                  # config + connectivity
 mlib search "balkan brass band"              # candidates, nothing downloaded
 mlib add <url> --artist "X" --album "Y"      # download -> staging/
 mlib staged                                  # review what is waiting
+mlib check                                   # listen: hold non-songs and duplicates
 mlib approve all                             # tag, publish, trigger rescan
 mlib reject 2                                # discard one
 mlib ls --tracks                             # what is live
@@ -63,9 +69,65 @@ mlib rm "Artist/Album/Song.mp3"              # remove from the library
 
 `approve` accepts `all`, `2`, or `1,3-4`.
 
+## `mlib check` — listen before publishing
+
+Search results for a song title are sometimes a news report, a documentary or a
+let's-play with that title. `check` transcribes three snippets of each staged
+file (Whisper, optional extra: `pip install -e .[check]`) and fingerprints the
+audio against the other staged files and the whole library. Verdicts are stored
+in the sidecar; `approve` runs `check` on anything unchecked and **skips held
+files** unless given `--anyway`.
+
+- `speech` — >= 0.6 distinct words/s, or >= 0.45 with speech's gappy energy
+  pattern. Songs, even with clear vocals, stayed under (max 0.58, not gappy).
+- `duplicate` — chroma similarity >= 0.6 at the best offset, i.e. the same
+  recording. Different performances of one song are *not* duplicates.
+- `electronic` — >= 40% of energy below 60 Hz. Bands, orchestras and choirs sit
+  under 26% (most under 5%); the one electronic remix that got through scored 61%.
+- `length` — under 45s or over 15min.
+
+Library fingerprints are cached in `~/.cache/mlib/fingerprints`, so only the
+first run downloads the library. The full process is the `add-music` skill.
+
 Nothing in `staging/` is in the library. Nothing leaves `staging/` without
 `approve`. Deletes go through `mlib rm`, and Navidrome purges the DB row on the
 next scan (`ND_SCANNER_PURGEMISSING: always`).
+
+## Songs vs sources — the catalog
+
+A library file is one *source* (a YouTube upload, a sovmusic.ru or archive.org file) of
+one *version* (vocal or instrumental) of one *song* (a work, e.g. "Катюша").
+`catalog/songs.json` records all three, so a song survives its source: when the
+audio is bad, a better recording turns up, or an upload dies, the version is
+re-sourced, and every source ever rejected is remembered and refused.
+
+```bash
+mlib songs --theme sov --missing vocal       # what still needs finding
+mlib song "Катюша"                           # versions + every source and why it failed
+mlib source add "Катюша" vocal <url> --performer "..."     # a candidate (--theme if new)
+mlib source find "Катюша" vocal --provider sovmusic        # search, record the best 3
+mlib fill "Катюша" vocal [--provider sovmusic]             # stage the top candidate
+mlib replace "Катюша" vocal --next --reason "bad audio"    # stage next candidate
+mlib replace "Катюша" vocal --url <url> --reason "..."     # or a given one
+```
+
+- Song id is `<theme>/<normalized title>`; theme and version come from the
+  collection (`sov vocal` -> `sov`, `vocal`). Anything else is theme `other`.
+- Titles match on casefold, ё->е, no punctuation — nothing cleverer. "Марш Варяг"
+  and "Варяг" are one work only because the song lists it in `aliases`.
+  `catalog import` merges songs named by an alias and prints near-matches it did
+  **not** merge; decide those by hand.
+- The performer belongs to the source; library tags come from the current one.
+- `add` records a staged source (refuses one already rejected/replaced/removed
+  unless `--anyway`); `approve` makes it live, and for a `replace` publishes the
+  new file, deletes the old path and marks the old source `replaced`; `reject
+  [--reason]` marks it `rejected` (default reason: the `check` verdict); `rm
+  [--reason]` marks the version `removed`, keeping its history.
+- `mlib catalog import [--history TSV] [--picks GLOB]` rebuilds/refreshes it from
+  the live listing, staging sidecars and pick files. Re-runnable: sources merge by
+  id, states only move forward, and it syncs `live`/`staged` with reality.
+- Version status `none-exists` (set by hand in the JSON) stops `--missing`
+  nagging about a version that was never recorded.
 
 ## `mlib batch` — a known list, zero tokens
 
@@ -132,14 +194,16 @@ prompt on stdin and prints text works.
 
 When asked to find music, work in this order:
 
-1. `mlib search "<description>"` — get candidates.
+1. `mlib songs --missing any` / `mlib song "<title>"` — what is already live,
+   staged or rejected. Then `mlib search "<description>"` — get candidates.
 2. Judge them. Prefer full/official uploads over live phone recordings, clips,
    reaction videos, or hour-long compilations. Check the duration looks like a
    song.
 3. `mlib add` each keeper with **explicit** `--artist` / `--album` / `--title`.
    Do not rely on the auto-guess — source titles are full of junk like
    `(Official Video)` and channel names that are not the artist.
-4. `mlib staged` and **report the list to the user. Stop there.**
+4. `mlib check`, then `mlib staged`, and **report the list to the user** —
+   including anything held and why. **Stop there.**
 5. Only run `mlib approve` when the user says which ones they want.
 
 Never approve on your own initiative. Never `mlib rm` without being asked.
@@ -182,5 +246,7 @@ Server-side, see `server/` — `docker-compose.yml` plus the tagger. Deploy with
   server-side `.env`.
 - `mlib/naming.py` and `server/tagger/tagger.py` must agree on the layout. If you
   change the convention in one, change it in the other.
+- Windows is case-insensitive: two library files differing only in case
+  ("Армии"/"армии") collide when downloaded locally. Key local copies by index.
 - Only fetch material you are entitled to. The tool takes URLs you give it; it is
   not a catalogue.
