@@ -11,13 +11,21 @@ Three failure modes this exists for, all seen in practice:
 - The same recording twice. Each track gets a chroma fingerprint, compared at
   every time offset against the other staged files and the whole library.
 
-Calibrated on the "sov" collection (56 files, 7 of them not songs): spoken
+Calibrated on a collection of Soviet marches and songs - Russian, mostly brass
+bands and choirs (56 files, 7 of them not songs): spoken
 tracks scored 0.7-1.5 distinct words/s, plus one dialogue at 0.56 that was full of
 pauses; songs scored <= 0.58, and none of those near the line were gappy. An
 identical recording re-encoded and trimmed scored 0.83 similarity; the closest
 pair of different recordings scored 0.28.
 The one electronic remix had 61% of its energy below 60 Hz; acoustic recordings
 had at most 26%, most under 5%.
+
+The thresholds come from Russian speech and song; other languages have not been
+measured, so treat a near-the-line `speech` verdict with care. The language is
+per file (`settings`): a collection's own `lang`, else MLIB_CHECK_LANG, else
+Whisper detects it. The sub-bass test only makes sense where electronic
+production is wrong, so it runs only for collections marked `acoustic` - a
+techno or hip-hop collection would otherwise be held wholesale.
 
 Whisper is optional (`pip install -e .[check]`). Without it, only the energy
 pattern is used, which catches plain talk but misses speech over a backing track.
@@ -94,15 +102,16 @@ def have_whisper():
         return False
 
 
-def talk_rate(x, snippet=30):
-    """Distinct words per second over three snippets, plus a sample of what was heard."""
+def talk_rate(x, snippet=30, lang=None):
+    """Distinct words per second over three snippets, plus a sample of what was heard.
+    `lang` is a Whisper language code; None lets Whisper detect it."""
     import torch
 
     model, dur = _whisper(), len(x) / SR
     words, heard = set(), []
     for frac in (0.2, 0.5, 0.8):
         start = int(max(0, frac * dur - snippet / 2) * SR)
-        r = model.transcribe(x[start:start + snippet * SR], language="ru", temperature=0.0,
+        r = model.transcribe(x[start:start + snippet * SR], language=lang, temperature=0.0,
                              condition_on_previous_text=False, fp16=torch.cuda.is_available())
         text = " ".join(s["text"].strip() for s in r["segments"] if s["no_speech_prob"] < 0.6)
         words.update(w.strip(".,!?;:-—«»\"'").lower() for w in text.split())
@@ -164,8 +173,12 @@ def library_fingerprints(progress=print):
 # -- verdicts ------------------------------------------------------------
 
 
-def check_files(files, read_meta, write_meta, library=True, progress=print):
-    """Judge staged files, storing {'verdict', 'detail'} in each sidecar."""
+def check_files(files, read_meta, write_meta, library=True, progress=print, settings=None):
+    """Judge staged files, storing {'verdict', 'detail'} in each sidecar.
+
+    `settings(meta)` returns per-file options: {'lang': 'ru' or None (detect),
+    'acoustic': True to hold electronic production}. Default: detect, not acoustic."""
+    settings = settings or (lambda meta: {})
     use_whisper = have_whisper()
     if not use_whisper:
         progress("(whisper not installed - speech over music will be missed; "
@@ -175,6 +188,7 @@ def check_files(files, read_meta, write_meta, library=True, progress=print):
     results = []
     for path in files:
         meta = read_meta(path)
+        opts = settings(meta)
         x = decode(path)
         dur = len(x) / SR
         fp = fingerprint(x)
@@ -183,12 +197,12 @@ def check_files(files, read_meta, write_meta, library=True, progress=print):
         bass = sub_bass(x)
         if not MIN_LEN <= dur <= MAX_LEN:
             verdict, detail = "length", "{:.0f}s does not look like one song".format(dur)
-        elif bass >= SUB_BASS:
+        elif opts.get("acoustic") and bass >= SUB_BASS:
             verdict, detail = "electronic", "{:.0%} of energy below 60 Hz - a remix, not a band".format(bass)
         else:
             pauses = pause_ratio(x)
             if use_whisper:
-                rate, heard = talk_rate(x)
+                rate, heard = talk_rate(x, lang=opts.get("lang"))
                 if rate >= SPEECH_WPS or (rate >= TALKY_WPS and pauses >= PAUSE_RATIO):
                     verdict, detail = "speech", "{:.2f} words/s: {}".format(rate, heard)
             elif pauses >= PAUSE_ONLY:

@@ -1,16 +1,23 @@
 """The song catalog - which songs the library should hold, apart from where the audio came from.
 
-A song is a work ("Катюша"). It has up to two versions, vocal and instrumental,
-and each version has sources: recordings found somewhere (YouTube, sovmusic.ru,
+A song is a work ("Катюша", "Take Five"). It has one or more versions - vocal
+and instrumental where the music comes in both, or a single plain `main` version
+where it does not - and each version has sources: recordings found somewhere (YouTube, sovmusic.ru,
 archive.org - see providers.py), each with its own performer and a status. The library file is just the current
 source of one version, so a version can be re-sourced when the audio is bad or
 the upload dies, and a source that was rejected once is never picked again.
 
     songs[<theme>/<slug>] = {title, theme, aliases, notes, versions}
-    versions[vocal|instrumental] = {collection, album, current, library_path,
-                                    status, sources}
+    versions[vocal|instrumental|main] = {collection, album, current, library_path,
+                                         status, sources}
     sources = [{id, provider, url, performer, title, status, reason, added,
                 library_path, year?, flags?}]
+
+    collections[<name>] = {lang, acoustic}      # options for `mlib check`
+
+A theme groups songs: a collection "jazz vocal" is theme "jazz", version
+"vocal"; a collection "balkan" is theme "balkan", version "main"; an artist album
+or a single is theme "other".
 
 Stored as catalog/songs.json - human-editable, keys sorted for stable diffs.
 """
@@ -32,13 +39,16 @@ from .lock import file_lock
 from .naming import clean, safe
 
 CATALOG = REPO_ROOT / "catalog" / "songs.json"
-VERSIONS = ("vocal", "instrumental")
+VERSIONS = ("vocal", "instrumental")     # the pair, where music comes in both
+MAIN = "main"                            # the one version of everything else
+ALL_VERSIONS = VERSIONS + (MAIN,)
 OTHER = "other"
 
 # Version status: live | staged | wanted | removed | none-exists.
 # Source status, and how far along each is. Import merges by keeping the
-# furthest state, and the last three are verdicts - never picked again.
-_RANK = {"candidate": 0, "staged": 1, "live": 2, "rejected": 3, "replaced": 3, "removed": 3}
+# furthest state. The last three are verdicts - never picked again - and among
+# them "rejected" (the recording is bad) outranks a mere "gone from the library".
+_RANK = {"candidate": 0, "staged": 1, "live": 2, "removed": 3, "replaced": 4, "rejected": 5}
 BLOCKED = ("rejected", "replaced", "removed")
 
 # Brass bands and orchestras are instrumental unless a collection says otherwise.
@@ -60,11 +70,23 @@ def song_id(theme, title):
 
 
 def split_collection(name):
-    """'sov vocal' -> ('sov', 'vocal'). Anything else is theme 'other', version unknown."""
+    """'jazz vocal' -> ('jazz', 'vocal'); 'balkan' -> ('balkan', None); no collection
+    (an artist album, a single) -> ('other', None)."""
     words = (name or "").split()
     if len(words) >= 2 and words[-1].lower() in VERSIONS:
-        return " ".join(words[:-1]).lower(), words[-1].lower()
-    return OTHER, None
+        return _theme(" ".join(words[:-1])), words[-1].lower()
+    return (_theme(name), None) if words else (OTHER, None)
+
+
+def collection_for(theme, vname):
+    """The inverse of split_collection: where a version of a theme's song lives."""
+    if theme == OTHER:
+        return None
+    return "{} {}".format(theme, vname) if vname in VERSIONS else theme
+
+
+def _theme(text):
+    return norm(text).replace(" ", "-") or OTHER
 
 
 def guess_version(performer):
@@ -201,9 +223,19 @@ def performer(v):
 
 
 def missing(song, vname):
-    """Not in the library, not on its way, and not known to be impossible."""
+    """Not in the library, not on its way, and not known to be impossible.
+
+    An absent vocal/instrumental counts as missing only for a song that comes in
+    the pair; a song with a single `main` version is not missing the others."""
     v = song["versions"].get(vname)
-    return v is None or v["status"] == "wanted"
+    if v is None:
+        return vname in VERSIONS and MAIN not in song["versions"]
+    return v["status"] == "wanted"
+
+
+def collection_settings(cat, name):
+    """`mlib check` options for a collection: {'lang': ..., 'acoustic': ...}."""
+    return dict((cat.get("collections") or {}).get(name or "") or {})
 
 
 # -- state changes -------------------------------------------------------
@@ -245,7 +277,7 @@ def record(cat, url, title, performer=None, status="candidate", collection=None,
     """Put a source in the catalog (or update it). Returns (song id, version name, source).
 
     Placement, most explicit first: `song`/`vname` given, else where this URL
-    already sits, else derived from the collection ('sov vocal') and the title.
+    already sits, else derived from the collection ('jazz vocal') and the title.
     `extra` (e.g. year, flags) fills fields the source does not have yet.
     """
     c_theme, c_version = split_collection(collection)
@@ -258,7 +290,7 @@ def record(cat, url, title, performer=None, status="candidate", collection=None,
     else:
         sid = song_for(cat, theme, title)
     if not vname:
-        vname = existing[1] if existing and not song else (c_version or guess_version(performer))
+        vname = existing[1] if existing and not song else (c_version or MAIN)
 
     v = version(cat["songs"][sid], vname, collection=collection, album=album)
     if url:
@@ -393,14 +425,14 @@ def pick_sources(song, vname, results, cat=None):
     Ranked: right version known, performer known, the usual lyrics (a parody
     with other words sorts last), then the oldest recording first."""
     names = _names(song)
-    want = vname == "vocal"
+    want = vname == "vocal" if vname in VERSIONS else None    # main: either
     kept, dropped = [], []
     for r in results:
         bad = blocked(cat, r["url"]) if cat else None
         why = ("another song" if not title_matches(r["title"], names)
                else "film" if "film" in r.get("flags", ())
                else "foreign-language" if "foreign-language" in r.get("flags", ())
-               else "wrong version" if r.get("vocal") is not None and r["vocal"] != want
+               else "wrong version" if None not in (want, r.get("vocal")) and r["vocal"] != want
                else "already " + bad["status"] if bad
                else None)
         if why:
@@ -440,7 +472,7 @@ def _stem(rel):
     return str(PurePosixPath(rel).with_suffix(""))
 
 
-def import_all(cat, listing, history=(), sidecars=(), picks=(), theme="sov"):
+def import_all(cat, listing, history=(), sidecars=(), picks=(), theme=OTHER):
     """Merge what is known into the catalog. Re-runnable: sources merge by id.
 
     listing  - library-relative paths that are live right now

@@ -29,7 +29,13 @@ def test_source_id_survives_url_decoration():
 def test_split_collection():
     assert catalog.split_collection("sov vocal") == ("sov", "vocal")
     assert catalog.split_collection("cossack instrumental") == ("cossack", "instrumental")
-    assert catalog.split_collection("balkan") == ("other", None)
+    assert catalog.split_collection("jazz vocal") == ("jazz", "vocal")
+    assert catalog.split_collection("balkan") == ("balkan", None)
+    assert catalog.split_collection("Best of 80s") == ("best-of-80s", None)
+    assert catalog.split_collection(None) == ("other", None)
+    assert catalog.collection_for("jazz", "vocal") == "jazz vocal"
+    assert catalog.collection_for("balkan", "main") == "balkan"
+    assert catalog.collection_for("other", "main") is None
 
 
 def test_versions_of_one_song_share_an_entry():
@@ -57,7 +63,7 @@ def test_import_is_idempotent_and_never_moves_backwards():
               "collection": "sov vocal"}]
     cat = _empty()
     for _ in range(2):
-        catalog.import_all(cat, listing, history, sidecars, picks)
+        catalog.import_all(cat, listing, history, sidecars, picks, theme="sov")
 
     song = cat["songs"]["sov/катюша"]
     vocal = song["versions"]["vocal"]
@@ -68,7 +74,7 @@ def test_import_is_idempotent_and_never_moves_backwards():
     assert instr["status"] == "staged"
     assert instr["sources"][0]["reason"].startswith("held: speech")
     assert cat["songs"]["sov/смуглянка"]["versions"]["vocal"]["status"] == "wanted"
-    assert cat["songs"]["other/bosanska-artiljerija"]["versions"]["vocal"]["status"] == "live"
+    assert cat["songs"]["balkan/bosanska-artiljerija"]["versions"]["main"]["status"] == "live"
 
 
 def test_import_syncs_with_the_library_and_staging():
@@ -167,3 +173,57 @@ def test_rm_bad_source_wants_the_song_again():
     assert (v["status"], v["current"], v["library_path"]) == ("wanted", None, None)
     assert catalog.blocked(cat, YT + "v1")["reason"] == "has vocals"
     assert catalog.missing(cat["songs"]["sov/варяг"], "vocal")
+
+
+def test_any_genre_and_plain_versions():
+    cat = _empty()
+    sid, vname, _s = catalog.record(cat, YT + "j1", "Take Five", "Dave Brubeck Quartet",
+                                    collection="jazz instrumental")
+    assert (sid, vname) == ("jazz/take-five", "instrumental")
+    sid, vname, _s = catalog.record(cat, YT + "b1", "Kalashnikov", "Goran Bregović",
+                                    collection="balkan")
+    assert (sid, vname) == ("balkan/kalashnikov", "main")
+    meta = {"artist": "Nick Cave", "album": "The Boatman's Call", "title": "Into My Arms",
+            "source": YT + "n1", "collection": False}
+    assert catalog.stage(cat, meta)["song"] == "other/into-my-arms"
+    single = {"artist": "X", "album": "Singles", "title": "Y", "source": YT + "s1"}
+    assert catalog.stage(cat, single)["version"] == "main"
+
+    # a song with one plain version is not "missing" a vocal or an instrumental
+    balkan = cat["songs"]["balkan/kalashnikov"]
+    assert not catalog.missing(balkan, "vocal") and not catalog.missing(balkan, "instrumental")
+    assert catalog.missing(balkan, "main")      # only a candidate so far
+    jazz = cat["songs"]["jazz/take-five"]
+    assert catalog.missing(jazz, "vocal") and not catalog.missing(jazz, "main")
+
+
+def test_pick_sources_main_takes_either():
+    song = {"title": "Kalashnikov", "aliases": []}
+    results = [{"title": "Kalashnikov", "url": YT + "a", "vocal": False, "flags": []},
+               {"title": "Kalashnikov", "url": YT + "b", "vocal": True, "flags": []}]
+    kept, _ = catalog.pick_sources(song, "main", results)
+    assert len(kept) == 2
+
+
+def test_collection_settings():
+    cat = {"songs": {}, "collections": {"sov vocal": {"lang": "ru", "acoustic": True}}}
+    assert catalog.collection_settings(cat, "sov vocal") == {"lang": "ru", "acoustic": True}
+    assert catalog.collection_settings(cat, "jazz") == {}
+    assert catalog.collection_settings({"songs": {}}, None) == {}
+
+
+def test_import_never_downgrades_a_rejection():
+    # history still lists the file as live, but it was rejected after an rm --bad-source
+    cat = _empty()
+    meta = {"artist": "Оркестр", "album": "sov instrumental", "title": "Рокоссовский",
+            "source": YT + "r1", "collection": True}
+    catalog.stage(cat, meta)
+    catalog.published(cat, meta, "sov instrumental/Оркестр - Рокоссовский.mp3")
+    catalog.removed(cat, "sov instrumental/Оркестр - Рокоссовский.mp3", "has vocals",
+                    bad_source=True)
+    history = [{"artist": "Оркестр", "title": "Рокоссовский", "url": YT + "r1",
+                "status": "live", "info": "sov instrumental"}]
+    catalog.import_all(cat, [], history)
+    src = catalog.blocked(cat, YT + "r1")
+    assert (src["status"], src["reason"]) == ("rejected", "has vocals")
+    assert cat["songs"]["sov/рокоссовский"]["versions"]["instrumental"]["status"] == "wanted"

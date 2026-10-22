@@ -5,13 +5,17 @@ description: Add songs to the Navidrome library end to end - find or batch-fetch
 
 # Add music
 
-The library is only as good as what gets approved. Two mistakes have already
-happened and this process exists to stop them recurring:
+The library is only as good as what gets approved. Any genre works the same
+way; the examples below are real cases from one library (Soviet marches, Cossack
+choirs, Balkan brass), kept because each one is a mistake that already happened:
 
 1. **The file was not the song.** Searches for old marches returned news reports,
    a documentary, a let's-play and a political speech with the right title.
 2. **One album became fifty.** A collection was published one-folder-per-artist,
    so Navidrome showed every track as its own album.
+3. **A remix under a classic title.** An unknown "artist" (an "Урал Гайсин -
+   Священная война") turned out to be electronic.
+4. **Vocals in an instrumental.** A march staged as instrumental had a choir.
 
 ## Steps
 
@@ -26,76 +30,82 @@ mlib staged          # anything left over from last time?
 Then ask the catalog (`catalog/songs.json`) before searching anything:
 
 ```bash
-mlib songs --theme sov --missing vocal   # versions nobody has found yet
-mlib song "Катюша"                       # every source tried, and why it failed
+mlib songs --theme <theme> --missing any   # versions nobody has found yet
+mlib song "<title>"                        # every source tried, and why it failed
 ```
 
 Do not stage a song whose version is already `live` or `staged`, and do not
 re-offer a source the catalog lists as `rejected`/`replaced`/`removed` - `mlib
 add` refuses those anyway. A candidate you find but do not stage yet: `mlib
-source add "<title>" vocal <url> --performer "..."` (plus `--theme` for a new
+source add "<title>" <version> <url> --performer "..."` (plus `--theme` for a new
 song), so the next run starts from it.
 
 If `status` says Navidrome is unreachable or `MLIB_ND_PASS` is empty, say so up
 front: publishing still works, but nothing appears on the phone until a rescan.
 
-### 2. Decide the album shape
+### 2. Decide the album shape and versions
 
 Ask only if it is unclear from the request:
 
-- **Collection** - one album of many artists ("put the Soviet songs in sov").
+- **Collection** - one album of many artists ("put these in jazz vocal").
   Use `--collection <album>`. Files land in `<album>/<Artist> - <Title>.mp3`,
   tagged albumartist `Various Artists`, so Navidrome shows ONE album.
-  Existing collections in the library: the top-level folders of `mlib ls --local`
-  whose files look like `Artist - Title.mp3` (e.g. `sov`, `balkan`).
+  Existing collections: the top-level folders of `mlib ls --local` whose files
+  look like `Artist - Title.mp3`.
 - **Artist album** - `--artist X --album Y`, lands in `X/Y/Title.mp3`.
+
+Versions: if the music comes both sung and played (marches, standards, folk
+tunes), split it into `<theme> vocal` and `<theme> instrumental` collections; the
+catalog then tracks each version and `--missing` finds the gaps. Otherwise use a
+plain collection (`balkan`) - every song gets one `main` version.
+
+If the collection is in one known language, tell `check` once:
+`mlib catalog collection "<name>" --lang <code>`. Add `--acoustic` for bands,
+orchestras and choirs, so electronic remixes are held.
 
 ### 3. Fetch into staging
 
-Pick the source by what the song is:
+YouTube is the default source. Others exist where they are better:
 
-- **Soviet songs and marches -> sovmusic first.** Original records, and every
-  hit is labelled with year, vocal/instrumental and film/foreign-language, so
-  the junk YouTube serves (news reports, film scenes, remixes) is filtered for
-  free:
-  ```bash
-  mlib source find "Катюша" vocal --provider sovmusic   # records the best 3, downloads nothing
-  mlib song "Катюша"                                    # read them; reorder in the JSON if needed
-  mlib fill "Катюша" vocal --provider sovmusic          # stages the top candidate
-  ```
-  `mlib songs --theme sov --missing vocal --find sovmusic` does the `find` step
-  for every missing version, one request at a time.
-  Prefer pre-1950 recordings where there is a choice.
-- **Emigre Cossack choirs (Jaroff, Platoff Don Cossacks) -> archive.org.**
-  Search in English or transliteration (`mlib search --provider archive "Don
-  Cossack Jaroff"`). Cyrillic finds almost nothing.
-- **Kuban Cossack Choir, and anything the two above lack -> YouTube**, as below.
+| Music | Source |
+|---|---|
+| anything; also the fallback | `youtube` (default) |
+| Soviet songs and marches | `sovmusic` first - original records, each hit labelled with year, vocal/instr and film/foreign-language, so the junk is filtered for free. Prefer pre-1950 recordings. |
+| old 78s, emigre choirs (e.g. Jaroff/Platoff Don Cossacks) | `archive` - search in **English or transliteration** only |
 
-Never run sovmusic requests in parallel (no `&`, no concurrent agents hitting
-it) - the site bans the IP. mlib throttles itself; do not work around it.
-
-- A list of known songs -> write it to a file, one `Artist - Title` per line,
-  then `mlib batch songs.txt --dry-run [--collection sov]`. Read the right-hand
+- **A known list** -> one `Artist - Title` per line in a file, then
+  `mlib batch songs.txt --dry-run [--collection ...]`. Read the right-hand
   column, then run it for real. No model tokens.
-- A description -> `mlib search "..."`, judge, then `mlib add <url> --artist ...
-  --title ... [--collection sov]` for each keeper. Always pass the names
-  explicitly; source titles are junk.
+- **Songs the catalog already wants** ->
+  ```bash
+  mlib source find "<title>" <version> [--provider sovmusic]   # records the best 3, downloads nothing
+  mlib song "<title>"                                          # read them; reorder in the JSON if needed
+  mlib fill "<title>" <version> [--provider sovmusic]          # stages the top candidate
+  ```
+  `mlib songs --theme <theme> --missing <version> --find <provider>` runs the
+  `find` step over every missing version, one request at a time.
+- **A description** -> `mlib search "..." [--provider ...]`, judge, then
+  `mlib add <url> --artist ... --title ... [--collection ...]` for each keeper.
+  Always pass the names explicitly; source titles are junk.
+
+**Never download in parallel** - no `&`, no concurrent agents on one site.
+YouTube answers bursts with "confirm you're not a bot"; sovmusic bans the IP.
+mlib serializes and throttles itself; do not work around it.
 
 Judging search results: prefer studio/official uploads, 1:30-6:00 long. Avoid
 anything whose title or channel suggests news, TV, a documentary, an interview,
-a game, a reaction, a parade broadcast, or "full album"/compilation.
+a game, a reaction, a parade broadcast, a film scene, or "full album"/compilation.
 
 The performer must be someone you can name as a real ensemble or a known
 singer - for an instrumental, a band/orchestra/folk ensemble. An unknown solo
-"artist" offering a classic march is usually a producer's remix (an "Урал Гайсин
-- Священная война" turned out to be electronic). Reject titles or channels with
-remix, phonk, hardbass, EDM, trap, lo-fi, synth, 8-bit, "slowed", "bass boosted",
-"cover", "AI".
+"artist" offering a well-known piece is usually a producer's remix. Reject titles
+or channels with remix, phonk, hardbass, EDM, trap, lo-fi, synth, 8-bit,
+"slowed", "bass boosted", "cover", "AI" - unless that is what the user asked for.
 
-### 4. Check (the step that was missing)
+### 4. Check
 
 ```bash
-mlib check
+mlib check              # or: mlib check 3 --lang en
 ```
 
 It listens to each staged file:
@@ -103,12 +113,14 @@ It listens to each staged file:
 - transcribes three snippets with Whisper - steady distinct speech = `speech`
 - fingerprints the audio and compares it to every other staged file and the
   whole library - same recording = `duplicate`
-- measures sub-bass - 40%+ of the energy below 60 Hz = `electronic` (a remix,
-  not a band)
+- in collections marked `--acoustic`: 40%+ of the energy below 60 Hz =
+  `electronic` (a remix, not a band)
 - flags anything under 45s or over 15min = `length`
 
 Flagged files are **held**: `approve` skips them. The first run fingerprints the
 whole library once (cached in `~/.cache/mlib/fingerprints`), later runs are fast.
+The speech thresholds were calibrated on Russian; in other languages, read
+near-the-line verdicts yourself.
 
 Known blind spots - say so when reporting, the user's ears are the final check:
 
@@ -117,11 +129,12 @@ Known blind spots - say so when reporting, the user's ears are the final check:
   does not mention a film, and flag any that do.
 - **Vocal vs instrumental** cannot be decided from transcription: Whisper heard
   zero words in a fully sung "В путь!". When splitting by vocals, go by what the
-  user hears, and treat a choir/ensemble performer as vocal by default.
+  user hears and by provider labels, and treat a choir/ensemble performer as
+  vocal by default.
 
 Note what `duplicate` means: the *same recording*. Two different performances of
-one song (a choir and a brass band doing "Весна Победы") are not duplicates. If
-the user does not want both, that is their call - list them, do not decide.
+one song (a choir and a brass band doing one march) are not duplicates. If the
+user does not want both, that is their call - list them, do not decide.
 
 ### 5. Report and stop
 
@@ -155,7 +168,7 @@ Then make sure it shows up:
 Same tools, applied to what is already published. Download the album to a
 scratch folder, run `mlib.check.check_files` over it with `library=False`, read
 the held list with the user, then `mlib rm -y "<album>/<file>.mp3"` only for the
-ones they confirm.
+ones they confirm (`--bad-source` if the recording, not the song, is the problem).
 
 ## Bad audio in a live track
 
@@ -164,7 +177,7 @@ a remix"), the song is still wanted - only the source is bad. Default:
 
 ```bash
 mlib rm -y "<collection>/<file>.mp3" --bad-source --reason "<what the user said>"
-mlib source find "<title>" <vocal|instrumental>    # then `mlib fill` for a new one
+mlib source find "<title>" <version>    # then `mlib fill` for a new one
 ```
 
 That deletes the file, rejects the source (never picked again) and sets the
@@ -174,10 +187,10 @@ want this song at all". Never a bare `rm` and re-add - that loses the history.
 To swap in a better recording while the old one stays live until approval:
 
 ```bash
-mlib song "Варяг"                                        # candidates already known?
-mlib source find "Варяг" vocal --provider sovmusic       # no candidates yet? find some
-mlib replace "Варяг" vocal --next --reason "bad audio"   # or --url <url> --performer ...
-mlib check && mlib staged                                # report, stop
+mlib song "<title>"                                            # candidates already known?
+mlib source find "<title>" <version>                           # no candidates yet? find some
+mlib replace "<title>" <version> --next --reason "bad audio"   # or --url <url> --performer ...
+mlib check && mlib staged                                      # report, stop
 ```
 
 When the user approves, `approve` publishes the new file, deletes the old one if
@@ -188,3 +201,4 @@ the path changed, and marks the old source `replaced` with the reason.
 - approve, `rm`, or `--anyway` without the user saying so
 - publish a collection without `--collection` (it splits into one album per artist)
 - treat a same-title pair as a duplicate without the fingerprint saying so
+- download in parallel, from any site

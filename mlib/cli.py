@@ -11,6 +11,7 @@ from .config import STAGING, cfg
 from .naming import VARIOUS, clean, relpath, split_artist_title
 
 AUDIO_EXTS = {".mp3", ".m4a", ".flac", ".ogg", ".opus", ".wav", ".aac"}
+PROVIDER_CHOICES = sorted({p.name for p in providers.REGISTRY} | set(providers.ALIASES))
 
 
 def _staged_files():
@@ -145,8 +146,18 @@ def cmd_staged(args):
     return 0
 
 
-def _run_check(files, library=True):
-    return check.check_files(files, fetch.read_sidecar, fetch.write_sidecar, library=library)
+def _run_check(files, library=True, lang=None, acoustic=False):
+    """Check with per-collection options from the catalog; flags override them."""
+    cat = _catalog_try(lambda c: c, save=False) or {}
+
+    def settings(meta):
+        conf = catalog.collection_settings(cat, meta.get("album"))
+        chosen = lang or conf.get("lang") or cfg.check_lang
+        return {"lang": None if chosen in (None, "auto") else chosen,
+                "acoustic": acoustic or bool(conf.get("acoustic"))}
+
+    return check.check_files(files, fetch.read_sidecar, fetch.write_sidecar, library=library,
+                             settings=settings)
 
 
 def cmd_check(args):
@@ -156,7 +167,8 @@ def cmd_check(args):
         print("staging is empty")
         return 0
     print("listening to {} staged file(s)".format(len(picked)))
-    results = _run_check(picked, library=not args.staged_only)
+    results = _run_check(picked, library=not args.staged_only, lang=args.lang,
+                         acoustic=args.acoustic)
     _catalog_try(lambda cat: [catalog.note_check(cat, fetch.read_sidecar(r[0])) for r in results])
     held = [r for r in results if r[1] != "ok"]
     print("\n{} ok, {} held".format(len(results) - len(held), len(held)))
@@ -518,7 +530,7 @@ def _cell(song, vname):
 
 def cmd_songs(args):
     cat = catalog.load()
-    wanted = catalog.VERSIONS if args.missing == "any" else [args.missing]
+    wanted = catalog.ALL_VERSIONS if args.missing == "any" else [args.missing]
     rows = []
     for sid, song in sorted(cat["songs"].items()):
         if args.theme and song["theme"] != args.theme:
@@ -531,13 +543,16 @@ def cmd_songs(args):
         rows.append((sid, song))
     if args.find:
         for sid, song in rows:
-            for vname in wanted if args.missing else catalog.VERSIONS:
+            for vname in wanted if args.missing else catalog.ALL_VERSIONS:
                 if catalog.missing(song, vname):
                     _find_sources(sid, vname, args.find, args.limit)
         return 0
-    print("{:42} {:44} {}".format("song", "vocal", "instrumental"))
+    shown = [vn for vn in catalog.ALL_VERSIONS
+             if any(vn in song["versions"] for _sid, song in rows)] or list(catalog.VERSIONS)
+    print("{:42} ".format("song") + " ".join("{:44}".format(vn) for vn in shown).rstrip())
     for sid, song in rows:
-        print("{:42} {:44} {}".format(sid[:42], _cell(song, "vocal"), _cell(song, "instrumental")))
+        print("{:42} ".format(sid[:42]) +
+              " ".join("{:44}".format(_cell(song, vn)) for vn in shown).rstrip())
     print("\n{} song(s). details: mlib song <id-or-title>".format(len(rows)))
     return 0
 
@@ -588,8 +603,7 @@ def _source_add(cat, args):
               file=sys.stderr)
         return 2
     theme = args.theme or cat["songs"][hits[0]]["theme"]
-    collection = args.collection or (
-        None if theme == catalog.OTHER else "{} {}".format(theme, args.version))
+    collection = args.collection or catalog.collection_for(theme, args.version)
     sid, vname, s = catalog.record(
         cat, args.url, args.title or (cat["songs"][hits[0]]["title"] if hits else args.song),
         args.performer, collection=collection, theme=theme, vname=args.version,
@@ -631,8 +645,8 @@ def _stage_candidate(args, replacing):
                 return 2
             hit = catalog.locate(cat, args.url)
             theme = song["theme"]
-            collection = (v or {}).get("collection") or (
-                None if theme == catalog.OTHER else "{} {}".format(theme, args.version))
+            collection = (v or {}).get("collection") or catalog.collection_for(
+                theme, args.version)
             new = hit[2] if hit else catalog.record(
                 cat, args.url, (current or {}).get("title") or song["title"],
                 args.performer or (current or {}).get("performer"), collection=collection,
@@ -683,10 +697,10 @@ def _stage_candidate(args, replacing):
 
 def cmd_source_find(args):
     return 0 if _find_sources(args.song, args.version, args.provider, args.limit,
-                              theme=args.theme) is not None else 1
+                              theme=args.theme, collection=args.collection) is not None else 1
 
 
-def _find_sources(ref, vname, provider, limit, theme=None):
+def _find_sources(ref, vname, provider, limit, theme=None, collection=None):
     """Search one provider for a song version and record the best hits as
     candidates. Downloads nothing. Returns the recorded results, or None."""
     provider = providers.name(provider)
@@ -699,11 +713,11 @@ def _find_sources(ref, vname, provider, limit, theme=None):
         sid = hits[0]
         song = cat["songs"][sid]
         theme = song["theme"]
+        collection = collection or (song["versions"].get(vname) or {}).get("collection")
     else:
-        # sovmusic is a Soviet archive; anything else needs to be told the theme
-        theme = theme or ("sov" if provider == "sovmusic" else None)
+        theme = theme or (catalog.split_collection(collection)[0] if collection else None)
         if not theme:
-            print("no song '{}' yet - pass --theme to create it".format(ref))
+            print("no song '{}' yet - pass --collection (or --theme) to create it".format(ref))
             return None
         sid, song = None, {"title": clean(ref), "aliases": []}
 
@@ -711,7 +725,7 @@ def _find_sources(ref, vname, provider, limit, theme=None):
     results = providers.search(song["title"], provider=provider, limit=40)
     kept, dropped = catalog.pick_sources(song, vname, results, cat)
     kept = kept[:limit]
-    collection = None if theme == catalog.OTHER else "{} {}".format(theme, vname)
+    collection = collection or catalog.collection_for(theme, vname)
     with catalog.edit() as cat:
         for r in kept:
             sid, _v, src = catalog.record(
@@ -802,6 +816,22 @@ def cmd_catalog_import(args):
     return 0
 
 
+def cmd_catalog_collection(args):
+    """Show or set a collection's `check` options."""
+    with catalog.edit() as cat:
+        conf = cat.setdefault("collections", {}).setdefault(args.name, {})
+        if args.lang:
+            conf["lang"] = args.lang
+        if args.acoustic is not None:
+            conf["acoustic"] = args.acoustic
+        if not conf:
+            del cat["collections"][args.name]
+        shown = dict(conf)
+    print("{}: lang={}, acoustic={}".format(
+        args.name, shown.get("lang") or "auto", bool(shown.get("acoustic"))))
+    return 0
+
+
 # -- wiring --------------------------------------------------------------
 
 
@@ -816,7 +846,7 @@ def build_parser():
     s = sub.add_parser("search", help="search sources for candidates (no download)")
     s.add_argument("query")
     s.add_argument("-n", "--limit", type=int, default=8)
-    s.add_argument("--provider", choices=("youtube", "sovmusic", "archive"), default="youtube",
+    s.add_argument("--provider", choices=PROVIDER_CHOICES, default="youtube",
                    help="sovmusic: Soviet records, labelled vocal/instr/film; archive: "
                         "archive.org, English or transliterated queries only")
     s.set_defaults(func=cmd_search)
@@ -829,9 +859,9 @@ def build_parser():
     a.add_argument("--title")
     a.add_argument("--track", type=int)
     a.add_argument("--collection", metavar="ALBUM",
-                   help="put it in a many-artist album, e.g. --collection sov")
+                   help="put it in a many-artist album, e.g. --collection 'jazz vocal'")
     a.add_argument("--song", help="catalog song id or title (default: from title + collection)")
-    a.add_argument("--version", choices=catalog.VERSIONS,
+    a.add_argument("--version", choices=catalog.ALL_VERSIONS,
                    help="vocal or instrumental (default: from the collection name)")
     a.add_argument("--anyway", action="store_true",
                    help="stage it even if the catalog says this source was rejected")
@@ -849,7 +879,7 @@ def build_parser():
     ba.add_argument("file", help="text file, one 'Artist - Title' per line, '# comment' ok")
     ba.add_argument("--album", help="album for every entry (default: per-line, else Singles)")
     ba.add_argument("--collection", metavar="ALBUM",
-                    help="put every entry in one many-artist album, e.g. --collection sov")
+                    help="put every entry in one many-artist album, e.g. --collection balkan")
     ba.add_argument("--threshold", type=float, default=0.62, help="match confidence 0-1")
     ba.add_argument("--pool", type=int, default=6, help="results to consider per song")
     ba.add_argument("--keep", type=int, default=4,
@@ -874,6 +904,11 @@ def build_parser():
 
     ck = sub.add_parser("check", help="listen for non-songs and duplicates before approving")
     ck.add_argument("selection", nargs="?", default="all")
+    ck.add_argument("--lang", help="Whisper language code (en, ru, sr...) or 'auto'; default: "
+                                   "the collection's, else MLIB_CHECK_LANG, else auto-detect")
+    ck.add_argument("--acoustic", action="store_true",
+                    help="also hold electronic production (sub-bass), as for collections "
+                         "marked acoustic")
     ck.add_argument("--staged-only", action="store_true",
                     help="compare staged files with each other, not the whole library")
     ck.set_defaults(func=cmd_check)
@@ -900,43 +935,44 @@ def build_parser():
     so = sub.add_parser("songs", help="list catalog songs and which versions are live")
     so.add_argument("--theme")
     so.add_argument("--collection")
-    so.add_argument("--find", choices=("youtube", "sovmusic", "archive"),
+    so.add_argument("--find", choices=PROVIDER_CHOICES,
                     help="run `source find` on every missing version, one at a time")
     so.add_argument("--limit", type=int, default=3, help="candidates per version with --find")
-    so.add_argument("--missing", choices=catalog.VERSIONS + ("any",),
+    so.add_argument("--missing", choices=catalog.ALL_VERSIONS + ("any",),
                     help="only songs lacking this version (not live, staged or none-exists)")
     so.set_defaults(func=cmd_songs)
 
     sg = sub.add_parser("song", help="one song's versions and every source tried")
-    sg.add_argument("ref", help="song id (sov/катюша) or title")
+    sg.add_argument("ref", help="song id (jazz/take-five) or title")
     sg.set_defaults(func=cmd_song)
 
     src = sub.add_parser("source", help="record sources in the catalog")
     src_sub = src.add_subparsers(dest="source_command", required=True)
     sa = src_sub.add_parser("add", help="record a candidate source for a song version")
     sa.add_argument("song", help="song id or title (a new title creates the song)")
-    sa.add_argument("version", choices=catalog.VERSIONS)
+    sa.add_argument("version", choices=catalog.ALL_VERSIONS)
     sa.add_argument("url")
     sa.add_argument("--performer", required=True)
-    sa.add_argument("--theme", help="needed when the song is new, e.g. sov")
+    sa.add_argument("--theme", help="needed when the song is new, e.g. jazz")
     sa.add_argument("--collection", help="default: '<theme> <version>'")
     sa.add_argument("--title", help="track title, if not the song title")
     sa.add_argument("--anyway", action="store_true", help="record it even if rejected before")
     sa.set_defaults(func=cmd_source_add)
     sf = src_sub.add_parser("find", help="search a provider, record the best hits as candidates")
     sf.add_argument("song", help="song id or exact title (a new title creates the song)")
-    sf.add_argument("version", choices=catalog.VERSIONS)
-    sf.add_argument("--provider", choices=("youtube", "sovmusic", "archive"), default="sovmusic",
-                    help="default sovmusic; archive needs an English/transliterated title")
+    sf.add_argument("version", choices=catalog.ALL_VERSIONS)
+    sf.add_argument("--provider", choices=PROVIDER_CHOICES, default="youtube",
+                    help="archive needs an English/transliterated title")
     sf.add_argument("--limit", type=int, default=3, help="how many candidates to record")
-    sf.add_argument("--theme", help="for a new song (default: sov with sovmusic)")
+    sf.add_argument("--collection", help="for a new song, e.g. 'jazz vocal'")
+    sf.add_argument("--theme", help="for a new song, if not from --collection")
     sf.set_defaults(func=cmd_source_find)
 
     fi = sub.add_parser("fill", help="stage the best candidate for a version not yet live")
     fi.add_argument("song")
-    fi.add_argument("version", choices=catalog.VERSIONS)
+    fi.add_argument("version", choices=catalog.ALL_VERSIONS)
     fi.add_argument("--url", help="this source instead of the next candidate")
-    fi.add_argument("--provider", choices=("youtube", "sovmusic", "archive"),
+    fi.add_argument("--provider", choices=PROVIDER_CHOICES,
                     help="only consider candidates from this provider")
     fi.add_argument("--performer", help="performer of the source")
     fi.add_argument("--anyway", action="store_true", help="use it even if rejected before")
@@ -944,12 +980,12 @@ def build_parser():
 
     rp = sub.add_parser("replace", help="stage a better source; approve swaps it in")
     rp.add_argument("song")
-    rp.add_argument("version", choices=catalog.VERSIONS)
+    rp.add_argument("version", choices=catalog.ALL_VERSIONS)
     how = rp.add_mutually_exclusive_group(required=True)
     how.add_argument("--url", help="this source")
     how.add_argument("--next", action="store_true", help="the next candidate in the catalog")
     rp.add_argument("--reason", required=True, help="what is wrong with the current one")
-    rp.add_argument("--provider", choices=("youtube", "sovmusic", "archive"),
+    rp.add_argument("--provider", choices=PROVIDER_CHOICES,
                     help="with --next: only candidates from this provider")
     rp.add_argument("--performer", help="performer of the new source")
     rp.add_argument("--anyway", action="store_true", help="use it even if rejected before")
@@ -960,9 +996,16 @@ def build_parser():
     ci = ca_sub.add_parser("import", help="build or refresh the catalog from what exists")
     ci.add_argument("--history", help="TSV: artist, title, url, status, path-or-reason")
     ci.add_argument("--picks", help="glob of pick files, lines 'ADD | url | artist | title | coll'")
-    ci.add_argument("--theme", default="sov",
-                    help="theme for history rows that name no collection (default: sov)")
+    ci.add_argument("--theme", default="other",
+                    help="theme for history rows that name no collection")
     ci.set_defaults(func=cmd_catalog_import)
+    cc = ca_sub.add_parser("collection", help="show or set a collection's check options")
+    cc.add_argument("name", help="collection name, e.g. 'jazz vocal'")
+    cc.add_argument("--lang", help="Whisper language code, or 'auto'")
+    cc.add_argument("--acoustic", dest="acoustic", action="store_true", default=None,
+                    help="hold electronic production in this collection")
+    cc.add_argument("--no-acoustic", dest="acoustic", action="store_false")
+    cc.set_defaults(func=cmd_catalog_collection)
 
     sub.add_parser("scan", help="trigger a Navidrome rescan").set_defaults(func=cmd_scan)
     return p

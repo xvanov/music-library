@@ -1,18 +1,51 @@
-"""Where audio comes from. Each provider can search and download; the catalog
-records which one each source belongs to.
+"""Where audio comes from. A provider is one site mlib can search and download
+from; the catalog records which provider each source belongs to.
 
-- youtube   yt-dlp (fetch.py), the original path. Anything yt-dlp can open.
+YouTube (via yt-dlp) is the general default and also catches any URL no other
+provider claims. sovmusic.ru and archive.org are optional extras - and the
+worked examples for adding a site of your own.
+
+Adding a provider (say, Bandcamp) is one class and one line:
+
+    class Bandcamp(Provider):
+        name = "bandcamp"
+
+        def parse(self, url):          # a stable key if this URL is ours, else None
+            u = urlparse(url)
+            return u.path.strip("/") if (u.hostname or "").endswith("bandcamp.com") else None
+
+        def search(self, query, limit):   # -> list of result dicts, see below
+            ...
+
+        def download(self, key, url, dest):   # -> (path, info); write into dest
+            ...
+
+    REGISTRY.insert(0, Bandcamp())   # before YouTube, which accepts anything
+
+Optional overrides: `canonical(key, url)` (one URL per recording, so the catalog
+never stores the same source twice) and `probe(key, url)` (metadata before
+downloading). Rules for a provider:
+
+- Name staged files <provider>-<id>.<ext> and call tag.wipe() on them: tags from
+  other sites are often wrong or mis-encoded, and the server-side tagger only
+  fills empty fields, so garbage left in place stays forever.
+- Be polite: serialize requests and pause between them. Never download in
+  parallel. See SovMusic, which throttles across separate mlib runs.
+
+A search result is a dict: provider, id, url, title, raw_title, performer,
+channel, year (of the recording, when known), duration, vocal (True / False /
+None for unknown) and flags ("film", "foreign-language", "community", ...).
+`mlib source find` uses vocal and flags to drop the wrong version and junk.
+
+The examples:
+
 - sovmusic  sovmusic.ru: Soviet records with composer, lyricist, performer and
             year. Plain HTTP, cp1251. The site bans the IP (or subnet) of any
             client that opens parallel connections, so every request takes one
             cross-process lock and waits SOVMUSIC_GAP seconds after the previous
             request - including one made by another mlib run.
-- archive   archive.org: 78s and LPs, best for the emigre Cossack choirs. Its
-            search only understands English or transliterated titles.
-
-A search result is a dict: provider, id, url, title, raw_title, performer,
-channel, year (of the recording, when known), duration, vocal (True / False /
-None for unknown) and flags ("film", "foreign-language", "community", ...).
+- archive   archive.org: 78s and LPs. Its search only understands English or
+            transliterated titles.
 """
 import html
 import json
@@ -27,9 +60,6 @@ from . import fetch, tag
 from .config import STAGING
 from .lock import file_lock, touch
 
-PROVIDERS = ("youtube", "sovmusic", "archive.org")
-ALIASES = {"archive": "archive.org", "yt": "youtube"}
-
 HEADERS = {"User-Agent": "Mozilla/5.0 (mlib; personal music library)"}
 
 SOVMUSIC_GAP = 4.0
@@ -38,103 +68,178 @@ SOVMUSIC_SEARCH = "http://sovmusic.ru/result.php?part=1&type=simple&searchtype=n
 SOVMUSIC_FILE = "http://www.sovmusic.ru/m/{}.mp3"     # never /m32/ - a 32 kbps preview
 
 
-def name(provider):
-    """Canonical provider name from a CLI spelling ('archive' -> 'archive.org')."""
-    provider = (provider or "youtube").lower()
-    provider = ALIASES.get(provider, provider)
-    if provider not in PROVIDERS:
-        raise ValueError("unknown provider: {} (one of {})".format(provider, ", ".join(PROVIDERS)))
-    return provider
+class Provider:
+    """The interface. See the module docstring for how to add one."""
+
+    name = None
+
+    def parse(self, url):
+        """A stable key for a URL this provider owns (the same for every spelling
+        of one recording), else None."""
+        return None
+
+    def canonical(self, key, url):
+        return url
+
+    def search(self, query, limit):
+        raise NotImplementedError("{} cannot search".format(self.name))
+
+    def probe(self, key, url):
+        return {"id": key, "url": self.canonical(key, url), "raw_title": None,
+                "artist": "", "album": "", "title": "", "duration": None}
+
+    def download(self, key, url, dest):
+        raise NotImplementedError
 
 
-def parse(url):
-    """(provider, key) for a URL we can identify, else (None, None).
-
-    The key is stable across URL spellings: a YouTube video id, a sovmusic fname,
-    an archive.org '<identifier>' or '<identifier>/<file>'."""
-    u = urlparse(url or "")
+def _host(u):
     host = (u.hostname or "").lower()
     for prefix in ("www.", "m.", "music."):
         host = host[len(prefix):] if host.startswith(prefix) else host
-    if host == "sovmusic.ru":
-        m = re.search(r"/m(?:32)?/(\w+)\.mp3$", u.path)
-        fname = m.group(1) if m else parse_qs(u.query).get("fname", [None])[0]
-        if fname:
-            return "sovmusic", fname
-    if host == "archive.org":
-        parts = unquote(u.path).strip("/").split("/", 2)
-        if len(parts) >= 2 and parts[0] in ("details", "download") and parts[1]:
-            return "archive.org", "/".join(parts[1:])
-    if host in ("youtube.com", "youtu.be"):
+    return host
+
+
+class YouTube(Provider):
+    """yt-dlp: YouTube, and whatever else yt-dlp can open (the fallback)."""
+
+    name = "youtube"
+
+    def parse(self, url):
+        u = urlparse(url or "")
+        host = _host(u)
+        if host not in ("youtube.com", "youtu.be"):
+            return None
         vid = u.path.strip("/") if host == "youtu.be" else parse_qs(u.query).get("v", [None])[0]
         if not vid and u.path.startswith("/shorts/"):
             vid = u.path.split("/")[2]
-        if vid:
-            return "youtube", vid
+        return vid or None
+
+    def search(self, query, limit):
+        out = fetch.search(query, limit=limit)
+        for r in out:
+            r.update(provider=self.name, performer=r.get("artist"), year=None, vocal=None,
+                     flags=[])
+        return out
+
+    def probe(self, key, url):
+        return fetch.probe(url)
+
+    def download(self, key, url, dest):
+        return fetch.download(url, dest)      # keeps yt-dlp's <id>.<ext> naming
+
+
+class SovMusic(Provider):
+    name = "sovmusic"
+
+    def parse(self, url):
+        u = urlparse(url or "")
+        if _host(u) != "sovmusic.ru":
+            return None
+        m = re.search(r"/m(?:32)?/(\w+)\.mp3$", u.path)
+        return m.group(1) if m else parse_qs(u.query).get("fname", [None])[0]
+
+    def canonical(self, key, url):
+        return SOVMUSIC_FILE.format(key)
+
+    def search(self, query, limit):
+        return sovmusic_search(query)[:limit]
+
+    def download(self, key, url, dest):
+        path = dest / "sovmusic-{}.mp3".format(key)
+        sovmusic_get(SOVMUSIC_FILE.format(key), path)
+        return path, {"id": key, "provider": self.name}
+
+
+class Archive(Provider):
+    name = "archive.org"
+
+    def parse(self, url):
+        u = urlparse(url or "")
+        if _host(u) != "archive.org":
+            return None
+        parts = unquote(u.path).strip("/").split("/", 2)
+        if len(parts) >= 2 and parts[0] in ("details", "download") and parts[1]:
+            return "/".join(parts[1:])
+        return None
+
+    def search(self, query, limit):
+        return archive_search(query, limit=limit)
+
+    def probe(self, key, url):
+        track = _archive_track(key)
+        return {"id": track["id"], "url": track["url"], "raw_title": track["title"],
+                "artist": track["performer"] or "", "album": "", "title": track["title"],
+                "duration": track["duration"]}
+
+    def download(self, key, url, dest):
+        track = _archive_track(key)
+        path = dest / "archive-{}{}".format(_safe_id(track["id"]), Path(track["file"]).suffix)
+        _stream(track["url"], path)
+        return path, {"id": track["id"], "provider": self.name}
+
+
+# Asked in order; YouTube last because yt-dlp takes any URL the others decline.
+REGISTRY = [SovMusic(), Archive(), YouTube()]
+ALIASES = {"archive": "archive.org", "yt": "youtube"}
+FALLBACK = "youtube"
+
+
+def get(provider):
+    """A provider by name or CLI spelling ('archive' -> archive.org)."""
+    wanted = ALIASES.get((provider or FALLBACK).lower(), (provider or FALLBACK).lower())
+    for p in REGISTRY:
+        if p.name == wanted:
+            return p
+    raise ValueError("unknown provider: {} (one of {})".format(
+        provider, ", ".join(p.name for p in REGISTRY)))
+
+
+def name(provider):
+    return get(provider).name
+
+
+def parse(url):
+    """(provider name, key) for a URL some provider claims, else (None, None)."""
+    for p in REGISTRY:
+        key = p.parse(url)
+        if key:
+            return p.name, key
     return None, None
 
 
 def detect(url):
-    """Which provider downloads this URL. Anything unrecognised goes to yt-dlp."""
-    return parse(url)[0] or "youtube"
+    """Which provider downloads this URL. Anything unclaimed goes to yt-dlp."""
+    return parse(url)[0] or FALLBACK
 
 
 def canonical_url(url):
     provider, key = parse(url)
-    if provider == "sovmusic":
-        return SOVMUSIC_FILE.format(key)
-    return url
+    return get(provider).canonical(key, url) if provider else url
 
 
 # -- the three entry points ---------------------------------------------
 
 
-def search(query, provider="youtube", limit=8):
-    provider = name(provider)
-    if provider == "sovmusic":
-        return sovmusic_search(query)[:limit]
-    if provider == "archive.org":
-        return archive_search(query, limit=limit)
-    out = fetch.search(query, limit=limit)
-    for r in out:
-        r.update(provider="youtube", performer=r.get("artist"), year=None, vocal=None, flags=[])
-    return out
+def search(query, provider=FALLBACK, limit=8):
+    return get(provider).search(query, limit)
 
 
 def probe(url):
-    """Metadata for one URL, as fetch.probe returns it. sovmusic costs no request."""
+    """Metadata for one URL, as fetch.probe returns it."""
     provider, key = parse(url)
-    if provider == "sovmusic":
-        return {"id": key, "url": SOVMUSIC_FILE.format(key), "raw_title": None,
-                "artist": "", "album": "", "title": "", "duration": None}
-    if provider == "archive.org":
-        track = _archive_track(key)
-        return {"id": track["id"], "url": track["url"], "raw_title": track["title"],
-                "artist": track["performer"] or "", "album": "", "title": track["title"],
-                "duration": track["duration"]}
-    return fetch.probe(url)
+    return get(provider or FALLBACK).probe(key, url)
 
 
 def download(url, dest_dir=None):
-    """Download one URL into staging. Returns (path, info).
-
-    Files from sovmusic and archive.org are named <provider>-<id>.<ext> and have
-    every tag stripped: sovmusic's are cp1251 mojibake, and the server-side
-    tagger only fills empty fields, so garbage left here would stay forever."""
+    """Download one URL into staging. Returns (path, info). Files from anywhere
+    but yt-dlp have every tag wiped - see the module docstring."""
     provider, key = parse(url)
-    if provider not in ("sovmusic", "archive.org"):
-        return fetch.download(url, dest_dir)
+    p = get(provider or FALLBACK)
+    if p.name == FALLBACK:
+        return p.download(key, url, dest_dir)
     dest = Path(dest_dir or STAGING)
     dest.mkdir(parents=True, exist_ok=True)
-    if provider == "sovmusic":
-        path = dest / "sovmusic-{}.mp3".format(key)
-        sovmusic_get(SOVMUSIC_FILE.format(key), path)
-        info = {"id": key, "provider": provider}
-    else:
-        track = _archive_track(key)
-        path = dest / "archive-{}{}".format(_safe_id(track["id"]), Path(track["file"]).suffix)
-        _stream(track["url"], path)
-        info = {"id": track["id"], "provider": provider}
+    path, info = p.download(key, url, dest)
     tag.wipe(path)
     return path, info
 

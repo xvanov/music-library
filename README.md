@@ -79,6 +79,43 @@ then `codex login`). It signs in with a ChatGPT plan, so Plus at $20/month cover
 it with no API key. Roughly 5k tokens per run, nearly all of it Codex's own
 harness overhead. Use `--dry-run` to see the filtered shortlist for free.
 
+### Listen before publishing
+
+```bash
+mlib check
+```
+
+A search for a song title sometimes returns a news report, a documentary or a
+film scene with that title. `check` transcribes three snippets of each staged
+file (Whisper: `pip install -e .[check]`), fingerprints it against the library,
+and holds speech, duplicates, odd lengths and - in collections you mark
+`--acoustic` - electronic remixes. `approve` skips held files. Whisper detects
+the language unless you set it (`MLIB_CHECK_LANG`, `--lang`, or per collection
+with `mlib catalog collection "<name>" --lang fr`).
+
+### Songs, not files
+
+`catalog/songs.json` keeps the songs you want apart from the recordings that
+supply them, so a bad recording can be replaced and is never picked again:
+
+```bash
+mlib songs --missing any                          # what still needs finding
+mlib song "Take Five"                             # every source tried, and why it failed
+mlib source find "Take Five" instrumental         # record the best few candidates
+mlib fill "Take Five" instrumental                # stage the top one
+mlib rm "jazz/..." --bad-source --reason "live bootleg"   # bad recording: want it again
+```
+
+A song can have a `vocal` and an `instrumental` version (for music that comes
+both ways) or one plain `main` version.
+
+### Sources
+
+YouTube (via yt-dlp) is the default and handles any URL yt-dlp can open.
+`mlib/providers.py` also ships two optional providers, sovmusic.ru and
+archive.org (`mlib search --provider archive "..."`), which double as worked
+examples: adding a site is one small class - see the module docstring.
+
 ### Other commands
 
 | Command | Does |
@@ -87,6 +124,8 @@ harness overhead. Use `--dry-run` to see the filtered shortlist for free.
 | `mlib ls --tracks` | list the live library |
 | `mlib rm "Artist/Album/Song.mp3"` | delete a track (asks first) |
 | `mlib reject 2` | discard a staged file |
+| `mlib replace "<song>" <version> --next --reason "..."` | stage a better recording; approve swaps it in |
+| `mlib catalog import` | rebuild the catalog from the library and staging |
 | `mlib scan` | force a Navidrome rescan |
 
 ## Server

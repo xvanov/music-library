@@ -4,7 +4,7 @@ The library layout is  <Artist>/<Album>/<NN - Title>.<ext>  and the server-side
 tagger derives tags from exactly this shape, so both sides must agree. Keep this
 module in sync with server/tagger/tagger.py.
 
-A collection - one album of many artists, like "sov" - is laid out as
+A collection - one album of many artists, like a compilation - is laid out as
 <Album>/<Artist> - <Title>.<ext> and tagged with albumartist VARIOUS, which is
 what keeps Navidrome from splitting it into one album per artist.
 """

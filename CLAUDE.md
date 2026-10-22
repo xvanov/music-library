@@ -2,7 +2,9 @@
 
 Tooling for a self-hosted music setup: **Navidrome** on a home Linux box, played
 on iPhone through **Amperfy**, with a CLI (`mlib`) for finding, tagging and
-publishing tracks.
+publishing tracks. It is genre-neutral: the library holds whatever you put in
+it, and the examples below come from a real library (Balkan brass, Soviet
+marches, Cossack choirs) only because that is where the lessons were learned.
 
 ## What the pieces are
 
@@ -34,9 +36,10 @@ Layout, relative to the library root:
 <Artist> - <Title>.mp3                -> album "Singles"
 ```
 
-The shared albumartist is what makes a collection (e.g. `sov`) show as **one**
-album. Without it Navidrome groups by artist and a 50-track collection becomes 50
-albums. Publish collections with `mlib add/batch --collection <album>`.
+The shared albumartist is what makes a collection (e.g. `jazz vocal`, `balkan`)
+show as **one** album. Without it Navidrome groups by artist and a 50-track
+collection becomes 50 albums. Publish collections with
+`mlib add/batch --collection <album>`.
 
 The tagger **only fills empty fields** — it never overwrites a tag you set. So
 renaming an already-tagged file changes nothing. To force a re-derive, clear the
@@ -70,22 +73,55 @@ mlib rm "..." --bad-source --reason "..."    # bad recording: reject it, want th
 
 `approve` accepts `all`, `2`, or `1,3-4`.
 
+## Lessons that apply to any music
+
+Each of these happened at least once; the tooling exists to stop a repeat.
+
+- **The upload is not the song.** A search for a title returns a news report, a
+  documentary, a let's-play or a speech with that title. `mlib check` listens
+  for speech.
+- **Film scenes** pass as songs: the song plus dialogue and long quiet gaps.
+  Prefer uploads whose title does not mention a film; flag any that do.
+- **Remixes under a classic title** — an unknown "artist" offering a well-known
+  piece is usually a producer's remix (phonk, hardbass, EDM, "slowed", "bass
+  boosted", "AI"). Name a real ensemble or singer as the performer, or skip it.
+- **Vocals in an instrumental** (and the reverse). Transcription cannot decide
+  vocal vs instrumental — Whisper can hear zero words in a fully sung track.
+  Go by the user's ears and by provider labels.
+- **One album became fifty** — a collection published without `--collection`.
+- **YouTube rate-limits bursts** ("confirm you're not a bot"): download one at a
+  time with pauses; use `MLIB_COOKIES` if it persists. **Never download from any
+  site in parallel.**
+
 ## `mlib check` — listen before publishing
 
-Search results for a song title are sometimes a news report, a documentary or a
-let's-play with that title. `check` transcribes three snippets of each staged
-file (Whisper, optional extra: `pip install -e .[check]`) and fingerprints the
-audio against the other staged files and the whole library. Verdicts are stored
-in the sidecar; `approve` runs `check` on anything unchecked and **skips held
-files** unless given `--anyway`.
+`check` transcribes three snippets of each staged file (Whisper, optional extra:
+`pip install -e .[check]`) and fingerprints the audio against the other staged
+files and the whole library. Verdicts are stored in the sidecar; `approve` runs
+`check` on anything unchecked and **skips held files** unless given `--anyway`.
 
 - `speech` — >= 0.6 distinct words/s, or >= 0.45 with speech's gappy energy
   pattern. Songs, even with clear vocals, stayed under (max 0.58, not gappy).
 - `duplicate` — chroma similarity >= 0.6 at the best offset, i.e. the same
   recording. Different performances of one song are *not* duplicates.
-- `electronic` — >= 40% of energy below 60 Hz. Bands, orchestras and choirs sit
-  under 26% (most under 5%); the one electronic remix that got through scored 61%.
+- `electronic` — >= 40% of energy below 60 Hz. Only for collections marked
+  `acoustic`: bands, orchestras and choirs sit under 26% (most under 5%); the
+  one electronic remix that got through scored 61%. A techno or hip-hop
+  collection would be held wholesale, so it is off by default.
 - `length` — under 45s or over 15min.
+
+**Language.** Whisper's language comes from `--lang`, else the collection's
+setting, else `MLIB_CHECK_LANG`, else auto-detect. Set it for a collection when
+you know it — detection on singing is unreliable:
+
+```bash
+mlib catalog collection "chanson" --lang fr
+mlib catalog collection "sov instrumental" --lang ru --acoustic
+mlib check --lang en 3            # one-off override
+```
+
+The speech thresholds were calibrated on Russian; other languages are unmeasured,
+so read a near-the-line `speech` verdict yourself.
 
 Library fingerprints are cached in `~/.cache/mlib/fingerprints`, so only the
 first run downloads the library. The full process is the `add-music` skill.
@@ -96,24 +132,29 @@ next scan (`ND_SCANNER_PURGEMISSING: always`).
 
 ## Songs vs sources — the catalog
 
-A library file is one *source* (a YouTube upload, a sovmusic.ru or archive.org file) of
-one *version* (vocal or instrumental) of one *song* (a work, e.g. "Катюша").
-`catalog/songs.json` records all three, so a song survives its source: when the
-audio is bad, a better recording turns up, or an upload dies, the version is
-re-sourced, and every source ever rejected is remembered and refused.
+A library file is one *source* (a YouTube upload, an archive file...) of one
+*version* of one *song* (a work, e.g. "Take Five"). `catalog/songs.json` records
+all three, so a song survives its source: when the audio is bad, a better
+recording turns up, or an upload dies, the version is re-sourced, and every
+source ever rejected is remembered and refused.
 
 ```bash
-mlib songs --theme sov --missing vocal       # what still needs finding
-mlib song "Катюша"                           # versions + every source and why it failed
-mlib source add "Катюша" vocal <url> --performer "..."     # a candidate (--theme if new)
-mlib source find "Катюша" vocal --provider sovmusic        # search, record the best 3
-mlib fill "Катюша" vocal [--provider sovmusic]             # stage the top candidate
-mlib replace "Катюша" vocal --next --reason "bad audio"    # stage next candidate
-mlib replace "Катюша" vocal --url <url> --reason "..."     # or a given one
+mlib songs --theme jazz --missing vocal      # what still needs finding
+mlib song "Take Five"                        # versions + every source and why it failed
+mlib source add "Take Five" instrumental <url> --performer "..."  # a candidate
+mlib source find "Take Five" instrumental    # search a provider, record the best 3
+mlib fill "Take Five" instrumental           # stage the top candidate
+mlib replace "Take Five" instrumental --next --reason "bad audio"   # swap a live one
+mlib replace "Take Five" instrumental --url <url> --reason "..."
 ```
 
-- Song id is `<theme>/<normalized title>`; theme and version come from the
-  collection (`sov vocal` -> `sov`, `vocal`). Anything else is theme `other`.
+- **Versions.** Where music comes in both, a song has `vocal` and/or
+  `instrumental` (a march sung by a choir and played by a band). Everything else
+  has one plain `main` version. Absent vocal/instrumental only counts as
+  `--missing` for a song that has the pair.
+- **Themes.** Song id is `<theme>/<normalized title>`. Theme and version come
+  from the collection: `jazz vocal` -> `jazz` + `vocal`; `balkan` -> `balkan` +
+  `main`; an artist album or a single -> `other` + `main`.
 - Titles match on casefold, ё->е, no punctuation — nothing cleverer. "Марш Варяг"
   and "Варяг" are one work only because the song lists it in `aliases`.
   `catalog import` merges songs named by an alias and prints near-matches it did
@@ -131,35 +172,43 @@ mlib replace "Катюша" vocal --url <url> --reason "..."     # or a given on
     version `removed`. Both keep the history.
 - `mlib catalog import [--history TSV] [--picks GLOB]` rebuilds/refreshes it from
   the live listing, staging sidecars and pick files. Re-runnable: sources merge by
-  id, states only move forward, and it syncs `live`/`staged` with reality.
+  id, states only move forward (a rejection is never undone by an import), and it
+  syncs `live`/`staged` with reality.
 - Version status `none-exists` (set by hand in the JSON) stops `--missing`
   nagging about a version that was never recorded.
+- Collection options for `check` live under `collections` in the same file
+  (`mlib catalog collection`).
 - Concurrent writers take turns: every catalog write holds `catalog/songs.json.lock`.
 
 ## Sources — the providers
 
-`mlib/providers.py`. `mlib search --provider`, `mlib add <url>` (provider detected
-from the URL), `source find --provider`.
+`mlib/providers.py`: `mlib search --provider`, `mlib add <url>` (provider detected
+from the URL), `source find --provider`, `fill/replace --provider`.
 
-| Provider | Good for | Notes |
+| Provider | Role | Notes |
 |---|---|---|
-| `sovmusic` | Soviet songs and marches: original records, 1930s on | Labels each hit: year, vocal/instr (no lyricist credit = instrumental), film excerpt, foreign-language cover. `source find` drops film/foreign/wrong-version hits and ranks the oldest first. |
-| `archive` | emigre Cossack choirs (Jaroff, Platoff), 78s | Search works with **English or transliterated** titles only. An album item needs the file URL (`/download/<item>/<file>`). |
-| `youtube` | fallback; main source for the Kuban Cossack Choir | yt-dlp, as before. |
+| `youtube` | **the default**, and the fallback for any URL yt-dlp can open | Rate-limits bursts; see the lessons above. |
+| `sovmusic` | optional example: Soviet records, 1930s on | Labels each hit with year, vocal/instr (no lyricist credit = instrumental), film excerpt, foreign-language cover; `source find` uses them to drop junk and ranks the oldest first. |
+| `archive` | optional example: archive.org 78s and LPs | Search understands **English or transliterated** titles only. An album item needs the file URL (`/download/<item>/<file>`). |
+
+**Adding a provider** (Bandcamp, a label's archive...) is one class in
+`providers.py` — `parse(url)`, `search(query, limit)`, `download(key, url, dest)`,
+optionally `canonical()` and `probe()` — plus one line in `REGISTRY`. The module
+docstring has the template; sovmusic and archive.org are the worked examples.
+A provider must name staged files `<provider>-<id>.<ext>` (mlib then wipes every
+tag; other sites' tags are often mis-encoded) and must serialize its requests.
 
 **sovmusic throttle — a hard rule.** The site bans the IP or subnet of any client
 that opens parallel connections. Every request goes through one cross-process
 lock (`~/.cache/mlib/sovmusic.lock`) and starts at least 4 s after the previous
 one finished (`~/.cache/mlib/sovmusic.last`), across separate mlib runs. Never
 parallelize sovmusic requests or bypass `providers.sovmusic_get`. HTTP only
-(HTTPS fails); files are `/m/<id>.mp3`, never the 32 kbps `/m32/`.
+(HTTPS fails); files are `/m/<id>.mp3`, never the 32 kbps `/m32/`. Its MP3s carry
+cp1251 mojibake tags (comments, TXXX, ID3v1) — the reason non-YouTube files are
+wiped at download and again at approve.
 
-sovmusic MP3s carry cp1251 mojibake tags (comments, TXXX, ID3v1). Non-YouTube
-files are wiped of every tag at download and again at approve, before mlib writes
-its own. Staged names are `<provider>-<id>.<ext>`.
-
-Rights: the user approved both sites. They are archives of old records, not
-licensed services — prefer pre-1950 recordings where possible.
+Rights: the user approved sovmusic and archive.org. They are archives of old
+records, not licensed services — prefer pre-1950 recordings where possible.
 
 ## `mlib batch` — a known list, zero tokens
 
@@ -227,13 +276,13 @@ prompt on stdin and prints text works.
 When asked to find music, work in this order:
 
 1. `mlib songs --missing any` / `mlib song "<title>"` — what is already live,
-   staged or rejected. Then `mlib search "<description>"` — get candidates.
-2. Judge them. Prefer full/official uploads over live phone recordings, clips,
-   reaction videos, or hour-long compilations. Check the duration looks like a
-   song.
-3. `mlib add` each keeper with **explicit** `--artist` / `--album` / `--title`.
-   Do not rely on the auto-guess — source titles are full of junk like
-   `(Official Video)` and channel names that are not the artist.
+   staged or rejected. Then search the provider that fits (YouTube by default).
+2. Judge the candidates. Prefer full/official uploads over live phone recordings,
+   clips, reaction videos, or hour-long compilations. Check the duration looks
+   like a song. Apply the lessons above.
+3. `mlib add` each keeper with **explicit** `--artist` / `--album` / `--title`
+   (or `source find` + `fill`). Do not rely on the auto-guess — source titles are
+   full of junk like `(Official Video)` and channel names that are not the artist.
 4. `mlib check`, then `mlib staged`, and **report the list to the user** —
    including anything held and why. **Stop there.**
 5. Only run `mlib approve` when the user says which ones they want.
@@ -275,7 +324,8 @@ Server-side, see `server/` — `docker-compose.yml` plus the tagger. Deploy with
 
 - Secrets live in `.env` only. **This repo is public** — never commit a password,
   and keep `server/docker-compose.yml` reading `${UPLOAD_PASS}` from the
-  server-side `.env`.
+  server-side `.env`. No personal data beyond `catalog/songs.json` (song names
+  and source URLs, which the user is fine publishing).
 - `mlib/naming.py` and `server/tagger/tagger.py` must agree on the layout. If you
   change the convention in one, change it in the other.
 - Windows is case-insensitive: two library files differing only in case

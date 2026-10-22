@@ -190,3 +190,31 @@ def test_catalog_edit_saves_only_on_success(tmp_path):
             raise RuntimeError("boom")
     assert list(catalog.load(path)["songs"]) == ["sov/катюша"]
     assert not path.with_name("songs.json.lock").exists()
+
+
+def test_a_new_provider_is_one_class(tmp_path, monkeypatch):
+    class Bandcamp(providers.Provider):
+        name = "bandcamp"
+
+        def parse(self, url):
+            u = providers.urlparse(url)
+            return u.path.strip("/") or None if (u.hostname or "").endswith("bandcamp.com") \
+                else None
+
+        def search(self, query, limit):
+            return [{"provider": self.name, "id": "t", "url": "https://x.bandcamp.com/t",
+                     "title": query, "vocal": None, "flags": []}]
+
+        def download(self, key, url, dest):
+            path = dest / "bandcamp-{}.mp3".format(key.replace("/", "_"))
+            path.write_bytes(b"")
+            return path, {"id": key}
+
+    monkeypatch.setattr(providers, "REGISTRY", [Bandcamp()] + providers.REGISTRY)
+    monkeypatch.setattr(providers.tag, "wipe", lambda path: None)
+    url = "https://artist.bandcamp.com/track/song"
+    assert providers.detect(url) == "bandcamp"
+    assert catalog.source_id(url) == ("bandcamp", "bandcamp:track/song")
+    assert providers.search("x", provider="bandcamp")[0]["provider"] == "bandcamp"
+    path, _info = providers.download(url, tmp_path)
+    assert path.name == "bandcamp-track_song.mp3"

@@ -32,6 +32,8 @@ class Config:
     nd_pass = os.environ.get("MLIB_ND_PASS", "")
     audio_format = os.environ.get("MLIB_AUDIO_FORMAT", "mp3")
     audio_quality = os.environ.get("MLIB_AUDIO_QUALITY", "192")
+    # Whisper language for `mlib check` (en, ru, ...); unset or "auto" detects it.
+    check_lang = os.environ.get("MLIB_CHECK_LANG") or None
     # YouTube answers bursts of requests with "confirm you're not a bot"; a
     # logged-in session gets through. A cookies.txt file, or a browser to read
     # them from (the browser must be closed - it locks its cookie database).
