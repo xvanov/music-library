@@ -134,6 +134,12 @@ Known blind spots - say so when reporting, the user's ears are the final check:
   zero words in a fully sung "В путь!". When splitting by vocals, go by what the
   user hears and by provider labels, and treat a choir/ensemble performer as
   vocal by default.
+- **Diction-heavy old records trip `speech`.** Four genuine 1940s-60s songs
+  (Шульженко "Синий платочек", Бунчиков "Бескозырка", ...) scored 0.49-0.74
+  words/s - the same range as a poem read over music (0.70). The verdict's
+  transcript settles it: song lyrics (rhyme, refrain, the title's words) vs
+  prose about something else. Publish the former with `approve N --anyway` when
+  the owner has opted in to auto-publish, and say so in the report.
 
 Note what `duplicate` means: the *same recording*. Two different performances of
 one song (a choir and a brass band doing one march) are not duplicates. If the
