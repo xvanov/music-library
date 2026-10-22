@@ -52,6 +52,28 @@ Ask only if it is unclear from the request:
 
 ### 3. Fetch into staging
 
+Pick the source by what the song is:
+
+- **Soviet songs and marches -> sovmusic first.** Original records, and every
+  hit is labelled with year, vocal/instrumental and film/foreign-language, so
+  the junk YouTube serves (news reports, film scenes, remixes) is filtered for
+  free:
+  ```bash
+  mlib source find "Катюша" vocal --provider sovmusic   # records the best 3, downloads nothing
+  mlib song "Катюша"                                    # read them; reorder in the JSON if needed
+  mlib fill "Катюша" vocal --provider sovmusic          # stages the top candidate
+  ```
+  `mlib songs --theme sov --missing vocal --find sovmusic` does the `find` step
+  for every missing version, one request at a time.
+  Prefer pre-1950 recordings where there is a choice.
+- **Emigre Cossack choirs (Jaroff, Platoff Don Cossacks) -> archive.org.**
+  Search in English or transliteration (`mlib search --provider archive "Don
+  Cossack Jaroff"`). Cyrillic finds almost nothing.
+- **Kuban Cossack Choir, and anything the two above lack -> YouTube**, as below.
+
+Never run sovmusic requests in parallel (no `&`, no concurrent agents hitting
+it) - the site bans the IP. mlib throttles itself; do not work around it.
+
 - A list of known songs -> write it to a file, one `Artist - Title` per line,
   then `mlib batch songs.txt --dry-run [--collection sov]`. Read the right-hand
   column, then run it for real. No model tokens.
@@ -141,6 +163,7 @@ Do not `rm` and re-add - that loses the song's history. Re-source it:
 
 ```bash
 mlib song "Варяг"                                        # candidates already known?
+mlib source find "Варяг" vocal --provider sovmusic       # no candidates yet? find some
 mlib replace "Варяг" vocal --next --reason "bad audio"   # or --url <url> --performer ...
 mlib check && mlib staged                                # report, stop
 ```

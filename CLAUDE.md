@@ -128,6 +128,32 @@ mlib replace "Катюша" vocal --url <url> --reason "..."     # or a given on
   id, states only move forward, and it syncs `live`/`staged` with reality.
 - Version status `none-exists` (set by hand in the JSON) stops `--missing`
   nagging about a version that was never recorded.
+- Concurrent writers take turns: every catalog write holds `catalog/songs.json.lock`.
+
+## Sources — the providers
+
+`mlib/providers.py`. `mlib search --provider`, `mlib add <url>` (provider detected
+from the URL), `source find --provider`.
+
+| Provider | Good for | Notes |
+|---|---|---|
+| `sovmusic` | Soviet songs and marches: original records, 1930s on | Labels each hit: year, vocal/instr (no lyricist credit = instrumental), film excerpt, foreign-language cover. `source find` drops film/foreign/wrong-version hits and ranks the oldest first. |
+| `archive` | emigre Cossack choirs (Jaroff, Platoff), 78s | Search works with **English or transliterated** titles only. An album item needs the file URL (`/download/<item>/<file>`). |
+| `youtube` | fallback; main source for the Kuban Cossack Choir | yt-dlp, as before. |
+
+**sovmusic throttle — a hard rule.** The site bans the IP or subnet of any client
+that opens parallel connections. Every request goes through one cross-process
+lock (`~/.cache/mlib/sovmusic.lock`) and starts at least 4 s after the previous
+one finished (`~/.cache/mlib/sovmusic.last`), across separate mlib runs. Never
+parallelize sovmusic requests or bypass `providers.sovmusic_get`. HTTP only
+(HTTPS fails); files are `/m/<id>.mp3`, never the 32 kbps `/m32/`.
+
+sovmusic MP3s carry cp1251 mojibake tags (comments, TXXX, ID3v1). Non-YouTube
+files are wiped of every tag at download and again at approve, before mlib writes
+its own. Staged names are `<provider>-<id>.<ext>`.
+
+Rights: the user approved both sites. They are archives of old records, not
+licensed services — prefer pre-1950 recordings where possible.
 
 ## `mlib batch` — a known list, zero tokens
 
