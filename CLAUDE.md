@@ -282,6 +282,42 @@ Token discipline matters here because this runs on a $20 ChatGPT plan:
 Backend is `MLIB_LLM_CMD` (default: `codex`, then `claude`). Any CLI that reads a
 prompt on stdin and prints text works.
 
+## Podcasts
+
+Navidrome has no podcasts, so `mlib pod` publishes each episode as a track:
+`<Show>/<Show>/<YYYY-MM-DD - Title>.<ext>`, artist = album = albumartist = the
+show, genre `Podcast`. That is the ordinary artist/album shape, so the tagger
+derives the same tags (a leading year is not a track number). No staging, no
+`check`, no model: the feed is the source of truth.
+
+```bash
+mlib pod add "<show>"                 # Apple's directory -> RSS feed; publishes the newest
+mlib pod add "<show>" --keep 3 --min-minutes 15 --exclude "^Trailer"   # or change these later
+mlib pod ls                           # live episode, its age, heard count
+mlib pod sync [show]                  # the cycle; the server runs it hourly
+mlib pod rm "<show>" [--keep-files]
+```
+
+Per show the library keeps `keep` episodes (default 1), the newest unheard.
+`sync` deletes one whose Navidrome `playCount` > 0 (Amperfy scrobbles it),
+records its guid as heard, and fetches the next episode **newer** than anything
+heard - if there is none, it waits. Heard or older episodes never return. If
+play counts cannot be read (no `MLIB_ND_PASS`, Navidrome down, track not
+scanned yet) nothing is deleted. Play counts are per user: `MLIB_ND_USER` must be
+the account Amperfy uses.
+
+- **Check the feed `add` picked.** Fan, clip and "audio biography" feeds copy a
+  show's exact name; among exact matches the most recently updated wins, and
+  `--pick N` or a feed URL overrides it.
+- Filter what a show mixes in (trailers, highlight clips, re-runs) with
+  `--min-minutes` and `--exclude`, so a clip never takes the one slot.
+- RSS audio is published as the publisher made it (mp3/m4a, tags wiped and
+  rewritten). `--youtube <channel/playlist>` exists for shows with no feed.
+- Subscriptions live in `catalog/podcasts.json` (private, like the song
+  catalog). Commit it from inside `catalog/` after a change.
+- Server: `scripts/install-podcast-timer.sh` installs an hourly systemd user
+  timer (`mlib-podcasts.timer`). Skill: `.claude/skills/podcasts`.
+
 ## Running as an agent (interactively)
 
 When asked to find music, work in this order:

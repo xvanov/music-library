@@ -14,7 +14,7 @@ if [ -x "$REPO_DIR/.venv/bin/python" ]; then
 else
   PYTHON="${PYTHON:-$(command -v python3)}"
 fi
-"$PYTHON" -c "import mlib" 2>/dev/null || (cd "$REPO_DIR" && "$PYTHON" -c "import mlib") || {
+(cd "$REPO_DIR" && "$PYTHON" -c "import mlib.podcasts") || {
   echo "!! $PYTHON cannot import mlib - pip install -e $REPO_DIR first" >&2; exit 1; }
 
 if ! grep -q '^MLIB_MUSIC_DIR=' "$REPO_DIR/.env" 2>/dev/null; then
