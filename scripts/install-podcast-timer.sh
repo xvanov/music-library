@@ -3,6 +3,10 @@
 # Run this ON the server, from the repo clone. Safe to re-run: it rewrites the
 # units and restarts the timer. mlib reads .env from the repo, which on the
 # server should set MLIB_MUSIC_DIR (direct mode) and the MLIB_ND_* login.
+# Subscriptions are in the library itself (<music>/.mlib/podcasts.json), shared
+# with any laptop that runs `mlib pod add`; the server needs no catalog/ clone.
+# A run with no subscriptions, or with a failed show, exits 1 - the unit then
+# shows as failed in `systemctl --user status mlib-podcasts.service`.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

@@ -299,12 +299,15 @@ mlib pod rm "<show>" [--keep-files]
 ```
 
 Per show the library keeps `keep` episodes (default 1), the newest unheard.
-`sync` deletes one whose Navidrome `playCount` > 0 (Amperfy scrobbles it),
-records its guid as heard, and fetches the next episode **newer** than anything
-heard - if there is none, it waits. Heard or older episodes never return. If
-play counts cannot be read (no `MLIB_ND_PASS`, Navidrome down, track not
-scanned yet) nothing is deleted. Play counts are per user: `MLIB_ND_USER` must be
-the account Amperfy uses.
+`sync` deletes one whose Navidrome `playCount` > 0 once its `played` time is
+`MLIB_POD_GRACE_HOURS` old (default 6; Amperfy may scrobble at the start or
+halfway) and it is not in `getNowPlaying`, records its guid as heard, and
+fetches the next episode **newer** than anything heard - if there is none, it
+waits. Heard or older episodes never return. If play counts cannot be read (no
+`MLIB_ND_PASS`, Navidrome down) nothing is deleted; a track Navidrome has not
+scanned yet is kept, and a live file that vanished counts as heard. Play counts
+are per user: `MLIB_ND_USER` must be the account Amperfy uses. Podcast code only
+ever deletes inside `<Show>/<Show>/`.
 
 - **Check the feed `add` picked.** Fan, clip and "audio biography" feeds copy a
   show's exact name; among exact matches the most recently updated wins, and
@@ -313,10 +316,18 @@ the account Amperfy uses.
   `--min-minutes` and `--exclude`, so a clip never takes the one slot.
 - RSS audio is published as the publisher made it (mp3/m4a, tags wiped and
   rewritten). `--youtube <channel/playlist>` exists for shows with no feed.
-- Subscriptions live in `catalog/podcasts.json` (private, like the song
-  catalog). Commit it from inside `catalog/` after a change.
+- **State lives in the library**, `.mlib/podcasts.json`, read and written
+  through `store.py` so the laptop (WebDAV) and the server (direct) share one
+  file. Navidrome and the tagger skip dot-folders; dufs serves them (keep it
+  without `--hidden`). Each change re-reads, applies and writes in one step.
+  `catalog/podcasts.json` is a backup copy rewritten after each change - commit
+  it from inside `catalog/`. The first run with no library copy uploads it.
+- `sync` fails loudly (exit 1) when there is no state or no show, and when any
+  show failed; one failing show does not stop the others. A guid that failed
+  3 downloads is skipped from then on.
 - Server: `scripts/install-podcast-timer.sh` installs an hourly systemd user
-  timer (`mlib-podcasts.timer`). Skill: `.claude/skills/podcasts`.
+  timer (`mlib-podcasts.timer`); its failures show in `systemctl --user
+  status`. Skill: `.claude/skills/podcasts`.
 
 ## Running as an agent (interactively)
 
