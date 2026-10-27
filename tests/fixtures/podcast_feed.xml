@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+  <channel>
+    <title>Example Talk Show</title>
+    <item>
+      <title>Trailer: Season 3 Is Coming</title>
+      <guid isPermaLink="false">ep-trailer</guid>
+      <pubDate>Sat, 25 Oct 2026 08:00:00 +0000</pubDate>
+      <enclosure url="https://cdn.example.com/trailer.mp3?src=rss" type="audio/mpeg" length="1"/>
+      <itunes:duration>95</itunes:duration>
+    </item>
+    <item>
+      <title>Episode 3: Long Talk</title>
+      <guid isPermaLink="false">ep-3</guid>
+      <pubDate>Fri, 24 Oct 2026 10:00:00 -0400</pubDate>
+      <enclosure url="https://cdn.example.com/ep3" type="audio/x-m4a" length="1"/>
+      <itunes:duration>1:42:10</itunes:duration>
+    </item>
+    <item>
+      <title>Show notes only, no audio</title>
+      <guid>ep-article</guid>
+      <pubDate>Thu, 23 Oct 2026 10:00:00 +0000</pubDate>
+    </item>
+    <item>
+      <title>Episode 1: First</title>
+      <guid>ep-1</guid>
+      <pubDate>Mon, 13 Oct 2026 10:00:00 +0000</pubDate>
+      <enclosure url="https://cdn.example.com/ep1.mp3" type="audio/mpeg" length="1"/>
+      <itunes:duration>3600</itunes:duration>
+    </item>
+    <item>
+      <title>Episode 2: Middle</title>
+      <guid>ep-2</guid>
+      <pubDate>Mon, 20 Oct 2026 10:00:00 +0000</pubDate>
+      <enclosure url="https://cdn.example.com/ep2.mp3" type="audio/mpeg" length="1"/>
+      <itunes:duration>58:00</itunes:duration>
+    </item>
+  </channel>
+</rss>

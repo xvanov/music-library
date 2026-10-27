@@ -1,7 +1,8 @@
 """Write ID3/MP4/Vorbis tags. Mirrors the server-side tagger's field choices."""
 from pathlib import Path
 
-MP4KEY = {"artist": "\xa9ART", "album": "\xa9alb", "title": "\xa9nam", "albumartist": "aART"}
+MP4KEY = {"artist": "\xa9ART", "album": "\xa9alb", "title": "\xa9nam", "albumartist": "aART",
+          "genre": "\xa9gen"}
 
 
 def _open(path):
@@ -34,7 +35,7 @@ def _open(path):
 
 
 def apply(path, artist=None, album=None, title=None, track=None, albumartist=None, overwrite=True,
-          compilation=False):
+          compilation=False, genre=None):
     """Set tags on a file. With overwrite=False, only fills fields that are empty."""
     tags, kind = _open(path)
     if compilation:
@@ -45,6 +46,7 @@ def apply(path, artist=None, album=None, title=None, track=None, albumartist=Non
         "title": title,
         "albumartist": albumartist or artist,
         "tracknumber": str(track) if track else None,
+        "genre": genre,
     }
     written = []
     for key, val in values.items():
