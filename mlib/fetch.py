@@ -69,8 +69,9 @@ def probe(url):
     }
 
 
-def download(url, dest_dir=None):
-    """Download one URL to staging as an audio file. Returns the Path written."""
+def download(url, dest_dir=None, progress=None):
+    """Download one URL to staging as an audio file. Returns the Path written.
+    `progress` is called with yt-dlp's progress dicts while it downloads."""
     dest = Path(dest_dir or STAGING)
     dest.mkdir(parents=True, exist_ok=True)
     outtmpl = str(dest / "%(id)s.%(ext)s")
@@ -87,6 +88,8 @@ def download(url, dest_dir=None):
         ],
         "quiet": True,
     }
+    if progress:
+        opts["progress_hooks"] = [progress]
     with _ydl(opts) as ydl:
         info = ydl.extract_info(url, download=True)
     if not info:

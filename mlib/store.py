@@ -1,4 +1,5 @@
 """Put approved files into the library — either straight onto disk or over WebDAV."""
+import os
 import shutil
 from pathlib import Path
 from urllib.parse import quote
@@ -73,6 +74,39 @@ def get(relpath, local_path):
         raise StoreError(f"GET {relpath} -> {r.status_code}")
     Path(local_path).write_bytes(r.content)
     return local_path
+
+
+def read_text(relpath):
+    """A small text file in the library (mlib's own state), or None if missing."""
+    if cfg.mode() == "direct":
+        path = Path(cfg.music_dir) / relpath
+        return path.read_text(encoding="utf-8") if path.exists() else None
+    r = _dav_session().get(_dav_url(relpath))
+    if r.status_code == 404:
+        return None
+    if r.status_code != 200:
+        raise StoreError(f"GET {relpath} -> {r.status_code}")
+    return r.content.decode("utf-8")
+
+
+def write_text(relpath, text):
+    """Replace a small text file in the library - atomically on disk."""
+    mode = cfg.mode()
+    if mode == "none":
+        raise StoreError("no destination configured; copy .env.example to .env")
+    data = text.encode("utf-8")
+    if mode == "direct":
+        target = Path(cfg.music_dir) / relpath
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(target.name + ".tmp")
+        tmp.write_bytes(data)
+        os.replace(tmp, target)
+        return
+    session = _dav_session()
+    _dav_mkcol(session, relpath)
+    r = session.put(_dav_url(relpath), data=data)
+    if r.status_code not in (200, 201, 204):
+        raise StoreError(f"PUT {relpath} -> {r.status_code} {r.text[:200]}")
 
 
 def delete(relpath):

@@ -9,6 +9,7 @@ from datetime import date
 
 from . import agent, batch, catalog, check, fetch, navidrome, podcasts, providers, store, tag
 from .config import STAGING, cfg
+from .lock import file_lock
 from .naming import VARIOUS, clean, relpath, split_artist_title
 
 AUDIO_EXTS = {".mp3", ".m4a", ".flac", ".ogg", ".opus", ".wav", ".aac"}
@@ -836,8 +837,12 @@ def cmd_catalog_collection(args):
 # -- podcasts ------------------------------------------------------------
 
 
-def _one_show(state, ref):
-    hits = podcasts.find(state, ref)
+def _shows():
+    return (podcasts.load() or {"shows": {}})["shows"]
+
+
+def _one_show(shows, ref):
+    hits = podcasts.find({"shows": shows}, ref)
     if len(hits) == 1:
         return hits[0]
     print("'{}' matches {}".format(ref, ", ".join(hits) if hits else "no subscribed show"))
@@ -845,10 +850,11 @@ def _one_show(state, ref):
 
 
 def cmd_pod_add(args):
-    state = podcasts.load()
-    name = None if args.show.startswith("http") else _one_show_quiet(state, args.show)
-    if name:
+    hits = [] if args.show.startswith("http") else podcasts.find(
+        {"shows": _shows()}, args.show, exact=True)
+    if hits:
         # Already subscribed: change only what was asked.
+        name = hits[0]
         with podcasts.edit() as state:
             show = state["shows"][name]
             for key in ("keep", "min_minutes", "youtube"):
@@ -863,19 +869,17 @@ def cmd_pod_add(args):
             return 1
         name = show["name"]
         with podcasts.edit() as state:
-            if name in state["shows"]:
-                print("already subscribed: " + name)
-                return 1
-            state["shows"][name] = show
+            fresh = name not in state["shows"]
+            if fresh:
+                state["shows"][name] = show
+        if not fresh:
+            print("already subscribed: {} - change it with `mlib pod add \"{}\" --keep ...`"
+                  .format(name, name))
+            return 1
         print("subscribed: {}  <- {}".format(name, show["youtube"] or show["feed"]))
     if args.no_sync:
         return 0
     return cmd_pod_sync(argparse.Namespace(show=name))
-
-
-def _one_show_quiet(state, ref):
-    hits = podcasts.find(state, ref)
-    return hits[0] if len(hits) == 1 else None
 
 
 def _resolve_show(args):
@@ -910,13 +914,16 @@ def _resolve_show(args):
 
 
 def cmd_pod_ls(args):
-    shows = podcasts.load()["shows"]
+    shows = _shows()
     if not shows:
         print("no podcasts - subscribe with: mlib pod add \"<show>\"")
         return 0
     today = date.today()
     for name, show in sorted(shows.items()):
         bits = ["keep {}".format(show["keep"]), "{} heard".format(len(show["heard"]))]
+        given_up = [g for g, n in (show.get("failed") or {}).items() if n >= podcasts.MAX_FAILURES]
+        if given_up:
+            bits.append("{} failed for good".format(len(given_up)))
         if show.get("min_minutes"):
             bits.append(">= {} min".format(show["min_minutes"]))
         if show.get("title_exclude"):
@@ -934,18 +941,23 @@ def cmd_pod_ls(args):
 
 
 def cmd_pod_rm(args):
-    with podcasts.edit() as state:
-        name = _one_show(state, args.show)
-        if not name:
+    # Not while a sync is publishing an episode of the very show being removed.
+    with file_lock(podcasts.SYNC_LOCK, timeout=5, stale=3600):
+        with podcasts.edit() as state:
+            name = _one_show(state["shows"], args.show)
+            show = state["shows"].pop(name) if name else None
+        if not show:
             return 1
-        show = state["shows"].pop(name)
-    deleted = 0
-    for ep in show["live"]:
-        if args.keep_files:
-            print("kept: " + ep["relpath"])
-        elif store.delete(ep["relpath"]):
-            print("deleted: " + ep["relpath"])
-            deleted += 1
+        deleted = 0
+        for ep in show["live"]:
+            if args.keep_files:
+                print("kept: " + ep["relpath"])
+            elif not podcasts.owned(show, ep["relpath"]):
+                print("refusing to delete outside {}: {}".format(podcasts.show_dir(show),
+                                                                 ep["relpath"]))
+            elif store.delete(ep["relpath"]):
+                print("deleted: " + ep["relpath"])
+                deleted += 1
     print("unsubscribed: " + name)
     if deleted:
         _rescan()
@@ -955,12 +967,16 @@ def cmd_pod_rm(args):
 def cmd_pod_sync(args):
     names = None
     if args.show:
-        name = _one_show(podcasts.load(), args.show)
+        name = _one_show(_shows(), args.show)
         if not name:
             return 1
         names = [name]
-    if podcasts.sync(names):
+    changed, failed = podcasts.sync(names)
+    if changed:
         _rescan()
+    if failed:
+        print("{} show(s) failed: {}".format(len(failed), ", ".join(failed)), file=sys.stderr)
+        return 1
     return 0
 
 

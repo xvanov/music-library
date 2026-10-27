@@ -39,6 +39,9 @@ class Config:
     # them from (the browser must be closed - it locks its cookie database).
     cookies_file = os.environ.get("MLIB_COOKIES") or None
     cookies_browser = os.environ.get("MLIB_COOKIES_BROWSER") or None
+    # A played podcast episode stays this long before `pod sync` deletes it:
+    # Amperfy may scrobble at the start or halfway, not only at the end.
+    pod_grace_hours = float(os.environ.get("MLIB_POD_GRACE_HOURS") or 6)
 
     @classmethod
     def mode(cls):

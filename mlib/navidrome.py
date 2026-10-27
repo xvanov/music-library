@@ -52,18 +52,26 @@ def search(query, limit=20):
     return body.get("searchResult3", {})
 
 
-def play_count(title, album, path=None):
-    """How often the configured user played the track tagged `title` on `album`
-    (play counts are per user: use the account Amperfy logs in with). None when
-    Navidrome does not know the track - e.g. it has not been scanned yet."""
+def find_song(title, album, path=None):
+    """The Subsonic song tagged `title` on `album` (or stored at library-relative
+    `path`), with its playCount and `played` time - both per user: use the account
+    Amperfy logs in with. None when Navidrome does not know the track, e.g. it has
+    not been scanned yet."""
     for query in (album, title):
         body = _call("search3", query=query, songCount=500, albumCount=0, artistCount=0)
         for song in body.get("searchResult3", {}).get("song", []):
             same_tags = song.get("title") == title and song.get("album") == album
-            same_path = path and (song.get("path") or "").replace("\\", "/").endswith(path)
+            same_path = path and ("/" + (song.get("path") or "").replace("\\", "/")).endswith(
+                "/" + path)
             if same_tags or same_path:
-                return int(song.get("playCount") or 0)
+                return song
     return None
+
+
+def now_playing():
+    """Ids of the songs some client is playing right now."""
+    body = _call("getNowPlaying")
+    return {e.get("id") for e in body.get("nowPlaying", {}).get("entry", [])}
 
 
 def scan():
