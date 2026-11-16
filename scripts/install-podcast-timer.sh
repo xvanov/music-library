@@ -31,7 +31,7 @@ fi
 mkdir -p "$UNIT_DIR"
 cat > "$UNIT_DIR/$NAME.service" <<EOF
 [Unit]
-Description=mlib: replace heard podcast episodes with the newest unheard
+Description=mlib: fetch new podcast episodes, retire heard and old ones
 After=network-online.target
 Wants=network-online.target
 
