@@ -31,7 +31,7 @@ fi
 mkdir -p "$UNIT_DIR"
 cat > "$UNIT_DIR/$NAME.service" <<EOF
 [Unit]
-Description=mlib: replace heard podcast episodes with the newest unheard
+Description=mlib: fetch new podcast episodes, retire heard and old ones
 After=network-online.target
 Wants=network-online.target
 
@@ -65,5 +65,7 @@ if [ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)" != "yes" ]; t
 fi
 
 systemctl --user list-timers "$NAME.timer" --no-pager
-echo "==> logs: journalctl --user -u $NAME.service -n 50"
-echo "    run now: systemctl --user start $NAME.service"
+# One run right away, so the install is verified now rather than in an hour.
+systemctl --user start --no-block "$NAME.service"
+echo "==> first sync started; follow it: journalctl --user -u $NAME.service -f"
+echo "    later, from any machine: mlib pod ls   (first line: last sync, host, age)"

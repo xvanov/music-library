@@ -20,6 +20,8 @@ def _entries():
 
 
 def _show(**kw):
+    """The swap-on-play cycle these tests were written for; latest-mode tests say so."""
+    kw = dict({"mode": "heard", "keep": 1}, **kw)
     return dict(podcasts.new_show("Example Talk Show", feed="https://example.com/rss"), **kw)
 
 
@@ -456,3 +458,101 @@ def test_store_text_round_trip_in_direct_mode(tmp_path, monkeypatch):
     assert json.loads(store.read_text(podcasts.STATE)) == {"shows": {"Ш": 2}}
     assert [p.name for p in (tmp_path / ".mlib").iterdir()] == ["podcasts.json"]
     assert store.listing() == []                  # not audio: never part of the library
+
+
+# -- latest mode: new releases arrive whether or not the old ones were played --
+
+
+EP2_TITLE = "2026-10-20 - Episode 2: Middle"
+EP2 = NAME + "/" + NAME + "/2026-10-20 - Episode 2- Middle.mp3"
+
+
+def _ep4(world):
+    return dict(world.feed["entries"][1], guid="ep-4", title="Episode 4",
+                published="2026-10-31T10:00:00Z")
+
+
+EP4 = NAME + "/" + NAME + "/2026-10-31 - Episode 4.m4a"
+
+
+@pytest.fixture
+def latest(world):
+    podcasts.save({"shows": {NAME: _show(min_minutes=10, mode="latest", keep=2)}})
+    world.sync()
+    assert {e["guid"] for e in world.show()["live"]} == {"ep-3", "ep-2"}
+    world.lib.deleted.clear()
+    world.downloads.clear()
+    return world
+
+
+def test_new_shows_default_to_latest_keep_two():
+    show = podcasts.new_show("S", feed="https://x")
+    assert podcasts.mode(show) == "latest" and podcasts.keep(show) == 2
+    assert podcasts.mode({"keep": 1}) == "latest"         # saved before modes existed
+
+
+def test_choose_latest_counts_live_episodes_as_slots():
+    show = _show(mode="latest", keep=2, min_minutes=10,
+                 live=[{"guid": "ep-2", "title": "x", "relpath": "x"}])
+    assert [e["guid"] for e in podcasts.choose(show, _entries())] == ["ep-3"]
+    show["live"].append({"guid": "ep-3", "title": "y", "relpath": "y"})
+    assert podcasts.choose(show, _entries()) == []       # the newest two are both live
+    show["live"] = [{"guid": "ep-1", "title": "z", "relpath": "z"}]
+    assert [e["guid"] for e in podcasts.choose(show, _entries())] == ["ep-3", "ep-2"]
+
+
+def test_choose_latest_never_brings_back_a_dropped_episode():
+    show = _show(mode="latest", keep=2, min_minutes=10, dropped=["ep-2"],
+                 live=[{"guid": "ep-3", "title": "x", "relpath": "x"}])
+    assert podcasts.choose(show, _entries()) == []       # ep-1 is older still
+    undated = [{"guid": "yt:" + c, "title": c, "published": None, "duration": None}
+               for c in "abc"]
+    show = _show(mode="latest", keep=3, dropped=["yt:b"], live=[{"guid": "yt:a"}])
+    assert podcasts.choose(show, undated) == []           # cut at the dropped one
+
+
+def test_latest_new_release_arrives_unplayed_and_the_oldest_goes(latest):
+    latest.feed["entries"] = [_ep4(latest)] + latest.feed["entries"]
+    assert latest.sync() == (2, [])                       # one published, one deleted
+    show = latest.show()
+    assert {e["guid"] for e in show["live"]} == {"ep-4", "ep-3"}
+    assert latest.lib.deleted == [EP2]
+    assert show["dropped"] == ["ep-2"] and show["heard"] == []
+    assert latest.sync() == (0, [])                       # steady, and ep-2 stays gone
+    assert latest.downloads == ["ep-4"]
+
+
+def test_latest_keeps_an_episode_someone_is_listening_to(latest):
+    latest.feed["entries"] = [_ep4(latest)] + latest.feed["entries"]
+    latest.played(EP2_TITLE, count=1, at=datetime.now(timezone.utc).isoformat())
+    assert latest.sync() == (1, [])                       # ep-4 in, ep-2 kept (halfway)
+    assert latest.lib.deleted == [] and len(latest.show()["live"]) == 3
+    latest.played(EP2_TITLE, count=0, at=LONG_AGO)
+    latest.nd["playing"] = {EP2_TITLE}
+    assert latest.sync() == (0, [])                       # playing right now
+    latest.nd["playing"] = set()
+    assert latest.sync() == (1, [])                       # finally idle: dropped
+    assert {e["guid"] for e in latest.show()["live"]} == {"ep-4", "ep-3"}
+
+
+def test_latest_with_navidrome_down_publishes_but_deletes_nothing(latest):
+    latest.feed["entries"] = [_ep4(latest)] + latest.feed["entries"]
+    latest.nd["up"] = False
+    assert latest.sync() == (1, [])
+    assert latest.lib.deleted == [] and len(latest.show()["live"]) == 3
+    latest.nd["up"] = True
+    assert latest.sync() == (1, []) and len(latest.show()["live"]) == 2
+
+
+def test_latest_heard_episode_is_still_retired_without_backfilling_older(latest):
+    latest.played("2026-10-24 - Episode 3: Long Talk")
+    assert latest.sync() == (1, [])                       # ep-3 heard and deleted
+    show = latest.show()
+    assert [e["guid"] for e in show["live"]] == ["ep-2"] and latest.downloads == []
+
+
+def test_sync_records_when_and_where_it_ran(latest):
+    synced = podcasts.load()["synced"]
+    assert synced["changed"] == 2 and synced["failed"] == [] and synced["host"]
+    assert "last sync: " + synced["at"] in cli._last_sync(synced)
+    assert "never" in cli._last_sync(None)

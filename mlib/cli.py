@@ -5,7 +5,7 @@ candidates freely and a human still decides what lands.
 """
 import argparse
 import sys
-from datetime import date
+from datetime import date, datetime, timezone
 
 from . import agent, batch, catalog, check, fetch, navidrome, podcasts, providers, store, tag
 from .config import STAGING, cfg
@@ -857,12 +857,12 @@ def cmd_pod_add(args):
         name = hits[0]
         with podcasts.edit() as state:
             show = state["shows"][name]
-            for key in ("keep", "min_minutes", "youtube"):
+            for key in ("keep", "min_minutes", "youtube", "mode"):
                 if getattr(args, key) is not None:
                     show[key] = getattr(args, key)
             if args.exclude is not None:
                 show["title_exclude"] = args.exclude or None
-        print("updated: {}  (keep {})".format(name, show["keep"]))
+        print("updated: {}  ({}, keep {})".format(name, podcasts.mode(show), show["keep"]))
     else:
         show = _resolve_show(args)
         if not show:
@@ -884,8 +884,9 @@ def cmd_pod_add(args):
 
 def _resolve_show(args):
     """A new subscription from a name (Apple's directory), a feed URL or --youtube."""
-    opts = {"keep": args.keep or 1, "min_minutes": args.min_minutes,
-            "title_exclude": args.exclude or None}
+    opts = {"keep": args.keep or podcasts.DEFAULT_KEEP, "min_minutes": args.min_minutes,
+            "title_exclude": args.exclude or None,
+            "mode": args.mode or podcasts.DEFAULT_MODE}
     if args.youtube or "youtube.com" in args.show or "youtu.be" in args.show:
         url = args.youtube or args.show
         name = args.name or (None if args.show.startswith("http") else clean(args.show))
@@ -914,13 +915,18 @@ def _resolve_show(args):
 
 
 def cmd_pod_ls(args):
-    shows = _shows()
+    state = podcasts.load() or {"shows": {}}
+    shows = state["shows"]
     if not shows:
         print("no podcasts - subscribe with: mlib pod add \"<show>\"")
         return 0
     today = date.today()
+    print(_last_sync(state.get("synced")))
     for name, show in sorted(shows.items()):
-        bits = ["keep {}".format(show["keep"]), "{} heard".format(len(show["heard"]))]
+        bits = [podcasts.mode(show), "keep {}".format(show["keep"]),
+                "{} heard".format(len(show["heard"]))]
+        if show.get("dropped"):
+            bits.append("{} dropped unheard".format(len(show["dropped"])))
         given_up = [g for g, n in (show.get("failed") or {}).items() if n >= podcasts.MAX_FAILURES]
         if given_up:
             bits.append("{} failed for good".format(len(given_up)))
@@ -938,6 +944,17 @@ def cmd_pod_ls(args):
         if not show["live"]:
             print("    nothing live")
     return 0
+
+
+def _last_sync(s):
+    """When any machine last ran `pod sync` - hourly means the server timer is alive."""
+    if not s:
+        return "last sync: never recorded (the server timer has not run since this was added)"
+    at = datetime.strptime(s["at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    hours = (datetime.now(timezone.utc) - at).total_seconds() / 3600
+    return "last sync: {} on {} ({:.1f}h ago){}".format(
+        s["at"], s.get("host", "?"), hours,
+        ", failed: " + ", ".join(s["failed"]) if s.get("failed") else "")
 
 
 def cmd_pod_rm(args):
@@ -1157,11 +1174,14 @@ def build_parser():
 
     sub.add_parser("scan", help="trigger a Navidrome rescan").set_defaults(func=cmd_scan)
 
-    po = sub.add_parser("pod", help="podcasts: keep the newest unheard episode of each show")
+    po = sub.add_parser("pod", help="podcasts: keep the newest episodes of each show")
     po_sub = po.add_subparsers(dest="pod_command", required=True)
     pa = po_sub.add_parser("add", help="subscribe (or change a subscription), then sync it")
     pa.add_argument("show", help="show name (looked up in Apple's directory) or a feed URL")
-    pa.add_argument("--keep", type=int, help="episodes to keep in the library (default 1)")
+    pa.add_argument("--keep", type=int, help="episodes to keep in the library (default 2)")
+    pa.add_argument("--mode", choices=podcasts.MODES,
+                    help="latest (default): always fetch new releases and drop the oldest "
+                         "beyond --keep; heard: fetch only when a played one frees a slot")
     pa.add_argument("--pick", type=int, help="take this directory match instead of the best")
     pa.add_argument("--name", help="name for the library (default: the directory's)")
     pa.add_argument("--youtube", metavar="URL", help="a channel or playlist instead of RSS")
@@ -1174,7 +1194,7 @@ def build_parser():
     pr.add_argument("show")
     pr.add_argument("--keep-files", action="store_true", help="leave live episodes in place")
     pr.set_defaults(func=cmd_pod_rm)
-    ps = po_sub.add_parser("sync", help="drop heard episodes, fetch the newest unheard")
+    ps = po_sub.add_parser("sync", help="drop heard episodes, fetch new releases, drop the oldest beyond keep")
     ps.add_argument("show", nargs="?", help="one show (default: all)")
     ps.set_defaults(func=cmd_pod_sync)
     return p

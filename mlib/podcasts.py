@@ -1,15 +1,27 @@
-"""Podcast subscriptions: keep the newest unheard episode of each show in the library.
+"""Podcast subscriptions: keep the newest episodes of each show in the library.
 
 Navidrome has no podcast feature, so an episode is published as an ordinary
-track. Per show the library holds `keep` episodes (default 1). Once Navidrome
-reports one as heard (played, and the last play a grace period ago - Amperfy
-scrobbles it), `sync` deletes it, remembers its guid as heard, and fetches the
-next episode newer than anything heard. Older episodes never come back, and
-neither does a heard one.
+track. Per show the library holds `keep` episodes (default 2). Each sync:
 
-    shows[<name>] = {name, feed | youtube, keep, min_minutes, title_exclude,
+1. Deletes a live episode Navidrome reports as heard (played, and the last play
+   a grace period ago - Amperfy scrobbles it), and remembers its guid as heard.
+2. Publishes the newest `keep` episodes that are not live yet. In the default
+   `latest` mode a new release arrives whether or not the old ones were played;
+   in `heard` mode only a freed slot is filled, so nothing new comes until
+   something is played.
+3. `latest` only: while more than `keep` are live, deletes the oldest - unless
+   it is playing now or was played within the grace period (someone is halfway
+   through it). Its guid goes to `dropped`, so it never comes back.
+
+Older episodes never come back, and neither does a heard or dropped one. When
+Navidrome cannot be read nothing is deleted, never on uncertainty; the library
+then holds more than `keep` until it can.
+
+    shows[<name>] = {name, feed | youtube, mode, keep, min_minutes, title_exclude,
                      live: [{guid, title, published, relpath}],
-                     heard: [guid], heard_until, failed: {guid: count}, added}
+                     heard: [guid], heard_until, dropped: [guid],
+                     failed: {guid: count}, added}
+    synced = {at, host, changed, failed}        # the last sync, for `pod ls`
 
 The state lives in the library itself, at .mlib/podcasts.json, so the laptop
 (WebDAV) and the server's hourly timer (direct) read and write one file.
@@ -48,6 +60,9 @@ BACKUP = REPO_ROOT / "catalog" / "podcasts.json"
 LOCKS = Path.home() / ".cache" / "mlib"
 EDIT_LOCK = LOCKS / "podcasts.lock"
 SYNC_LOCK = LOCKS / "podcasts.sync.lock"
+MODES = ("latest", "heard")
+DEFAULT_MODE = "latest"
+DEFAULT_KEEP = 2
 MAX_FAILURES = 3        # a guid that failed this often is skipped for good
 # A subfolder, so `mlib staged` / `approve` never see a half-done episode.
 DOWNLOADS = STAGING / "podcasts"
@@ -114,11 +129,21 @@ def find(state, ref, exact=False):
     return hits if hits or exact else [n for n in names if key in n.casefold()]
 
 
-def new_show(name, feed=None, youtube=None, keep=1, min_minutes=None, title_exclude=None):
-    return {"name": name, "feed": feed, "youtube": youtube, "keep": keep,
+def new_show(name, feed=None, youtube=None, keep=DEFAULT_KEEP, min_minutes=None,
+             title_exclude=None, mode=DEFAULT_MODE):
+    return {"name": name, "feed": feed, "youtube": youtube, "mode": mode, "keep": keep,
             "min_minutes": min_minutes, "title_exclude": title_exclude,
-            "live": [], "heard": [], "heard_until": None, "failed": {},
+            "live": [], "heard": [], "heard_until": None, "dropped": [], "failed": {},
             "added": date.today().isoformat()}
+
+
+def mode(show):
+    """A show saved before modes existed is `latest`, like every new one."""
+    return show.get("mode") or DEFAULT_MODE
+
+
+def keep(show):
+    return max(1, int(show.get("keep") or DEFAULT_KEEP))
 
 
 # -- finding a feed ------------------------------------------------------
@@ -277,30 +302,40 @@ def passes(show, ep):
 def choose(show, entries):
     """Episodes to fetch now, newest first.
 
+    `latest`: the newest `keep` episodes, counting the live ones - a new release
+    is fetched even while older ones sit unplayed (sync then drops the oldest).
+    `heard`: only as many as there are free slots.
+
     Only episodes newer than every heard one count: `entries` is newest first,
     and the list is cut at the first episode published before the newest heard
     one. Without dates (flat YouTube listings) it is cut by position instead, at
-    the first heard or live entry. Once the newest has been heard, nothing comes
-    until a newer one is published."""
-    heard = set(show.get("heard") or [])
+    the first heard or dropped entry (in `heard` mode also at the first live one).
+    Once the newest has been heard, nothing comes until a newer one is published."""
+    gone = set(show.get("heard") or []) | set(show.get("dropped") or [])
     live = {e["guid"] for e in show.get("live") or []}
     failed = show.get("failed") or {}
     until = show.get("heard_until")
-    want = max(0, int(show.get("keep") or 1) - len(live))
-    picked = []
+    latest = mode(show) == "latest"
+    want = keep(show) if latest else max(0, keep(show) - len(live))
+    picked, taken = [], 0
     for ep in entries:
-        if len(picked) >= want:
+        if taken >= want:
             break
         if until and ep.get("published"):
             if ep["published"] < until:     # `<`: another episode in the same second counts
                 break
-        elif ep["guid"] in heard or (not ep.get("published") and ep["guid"] in live):
+        elif ep["guid"] in gone or (not latest and not ep.get("published")
+                                    and ep["guid"] in live):
             break
-        if ep["guid"] in heard or ep["guid"] in live or not passes(show, ep):
+        if ep["guid"] in live:
+            taken += latest                 # a live episode holds one of the newest slots
+            continue
+        if ep["guid"] in gone or not passes(show, ep):
             continue
         if failed.get(ep["guid"], 0) >= MAX_FAILURES:
             continue
         picked.append(ep)
+        taken += 1
     return picked
 
 
@@ -406,6 +441,13 @@ def _heard(show, ep):
         show["heard_until"] = ep["published"]
 
 
+def _dropped(show, ep):
+    show["live"] = [e for e in show["live"] if e["guid"] != ep["guid"]]
+    dropped = show.setdefault("dropped", [])
+    if ep["guid"] not in dropped:
+        dropped.append(ep["guid"])
+
+
 def _live(show, ep):
     show["live"] = [e for e in show["live"] if e["guid"] != ep["guid"]] + [ep]
     show.setdefault("failed", {}).pop(ep["guid"], None)
@@ -439,16 +481,29 @@ def playing_now(log=print):
         return None
 
 
+def _recent(played, now=None):
+    now = now or datetime.now(timezone.utc)
+    return now - played < timedelta(hours=cfg.pod_grace_hours)
+
+
+def idle(song, playing, now=None):
+    """Nobody is listening: not playing now, and not played within the grace
+    period - a recent scrobble may mean someone is halfway through it."""
+    if not song:
+        return True                 # not scanned (or gone): nobody can be playing it
+    if song.get("id") in playing:
+        return False
+    played = _played_at(song.get("played"))
+    return played is None or not _recent(played, now)
+
+
 def finished(song, playing, now=None):
     """Heard: played, not playing now, and the last play at least the grace period
     ago - Amperfy may scrobble at the start or halfway through."""
     if not song or int(song.get("playCount") or 0) <= 0 or song.get("id") in playing:
         return False
     played = _played_at(song.get("played"))
-    if played is None:
-        return False
-    now = now or datetime.now(timezone.utc)
-    return now - played >= timedelta(hours=cfg.pod_grace_hours)
+    return played is not None and not _recent(played, now)
 
 
 def retire_heard(show, playing, log=print):
@@ -501,6 +556,40 @@ def fill(show, log=print, keepalive=None):
     return done
 
 
+def retire_extra(show, playing, log=print):
+    """Step 3, `latest` mode: while more than `keep` are live, delete the oldest
+    that nobody is listening to. Returns how many."""
+    live = [e for _i, e in sorted(enumerate(show.get("live") or []),
+                                  key=lambda p: (p[1].get("published") or "", p[0]))]
+    done = 0
+    # Only the oldest beyond `keep`: a busy one is skipped, never swapped for a newer.
+    for ep in live[:max(0, len(live) - keep(show))]:
+        if not owned(show, ep["relpath"]):
+            log("  refusing to delete outside {}: {}".format(show_dir(show), ep["relpath"]))
+            continue
+        song = navidrome.find_song(ep["title"], show["name"], ep.get("relpath"))
+        if not idle(song, playing):
+            log("  being listened to, kept for now: " + ep["relpath"])
+            continue
+        store.delete(ep["relpath"])
+        log("  older than the newest {}, deleted: {}".format(keep(show), ep["relpath"]))
+        _update(show["name"], lambda s, ep=ep: _dropped(s, ep))
+        _dropped(show, ep)
+        done += 1
+    return done
+
+
+def _stamp(changed, failed):
+    """Record the run in the shared state, so `pod ls` on any machine shows that
+    the server's timer is alive."""
+    import socket
+
+    with edit() as state:
+        state["synced"] = {"at": _iso(datetime.now(timezone.utc)),
+                           "host": socket.gethostname(), "changed": changed,
+                           "failed": failed}
+
+
 def sync(names=None, log=print):
     """Run the cycle for the given shows (default: all). Returns (changed, failed):
     how many files were added or removed, so the caller knows whether to rescan,
@@ -521,7 +610,7 @@ def sync(names=None, log=print):
                                .format(STATE, cfg.describe()))
         shows = state["shows"]
         names = names or sorted(shows)
-        playing = playing_now(log) if any(shows[n].get("live") for n in names) else None
+        playing = playing_now(log)
         changed, failed = 0, []
         for name in names:
             show = shows[name]
@@ -529,13 +618,23 @@ def sync(names=None, log=print):
             try:
                 if playing is not None:
                     changed += retire_heard(show, playing, log)
-                changed += fill(show, log, keepalive=SYNC_LOCK)
+                added = fill(show, log, keepalive=SYNC_LOCK)
+                changed += added
+                if mode(show) == "latest":
+                    if playing is not None:
+                        changed += retire_extra(show, playing, log)
+                    elif len(show.get("live") or []) > keep(show):
+                        log("  {} live, over keep {} - the oldest stays until Navidrome "
+                            "can be read".format(len(show["live"]), keep(show)))
             except Exception as exc:
                 log("  FAILED: {}".format(exc))
                 failed.append(name)
                 continue
             if not show.get("live"):
                 log("  nothing new yet")
+            elif not added:
+                log("  up to date")
+        _stamp(changed, failed)
         return changed, failed
     finally:
         held.__exit__(None, None, None)

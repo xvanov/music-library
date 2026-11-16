@@ -293,27 +293,36 @@ derives the same tags (a leading year is not a track number). No staging, no
 ```bash
 mlib pod add "<show>"                 # Apple's directory -> RSS feed; publishes the newest
 mlib pod add "<show>" --keep 3 --min-minutes 15 --exclude "^Trailer"   # or change these later
-mlib pod ls                           # live episode, its age, heard count
+mlib pod ls                           # last sync (time, host), live episodes, heard count
 mlib pod sync [show]                  # the cycle; the server runs it hourly
 mlib pod rm "<show>" [--keep-files]
 ```
 
-Per show the library keeps `keep` episodes (default 1), the newest unheard.
-`sync` deletes one whose Navidrome `playCount` > 0 once its `played` time is
-`MLIB_POD_GRACE_HOURS` old (default 6; Amperfy may scrobble at the start or
-halfway) and it is not in `getNowPlaying`, records its guid as heard, and
-fetches the next episode **newer** than anything heard - if there is none, it
-waits. Heard or older episodes never return. If play counts cannot be read (no
-`MLIB_ND_PASS`, Navidrome down) nothing is deleted; a track Navidrome has not
-scanned yet is kept, and a live file that vanished counts as heard. Play counts
-are per user: `MLIB_ND_USER` must be the account Amperfy uses. Podcast code only
-ever deletes inside `<Show>/<Show>/`.
+Per show the library keeps the newest `keep` episodes (default 2). Each `sync`:
+
+1. deletes one whose Navidrome `playCount` > 0 once its `played` time is
+   `MLIB_POD_GRACE_HOURS` old (default 6; Amperfy may scrobble at the start or
+   halfway) and it is not in `getNowPlaying`, and records its guid as heard;
+2. publishes new releases. In `latest` mode (the default) the newest `keep`
+   arrive whether or not the old ones were played; `--mode heard` fills only a
+   freed slot, so nothing new comes until something is played. That was the
+   old behaviour, and with keep 1 it looked like "the feed never updates";
+3. `latest` only: deletes the oldest beyond `keep`, unless it is in
+   `getNowPlaying` or was played within the grace period (someone is partway
+   through). Its guid goes to `dropped`.
+
+Heard, dropped, or older-than-heard episodes never return. If play counts
+cannot be read (no `MLIB_ND_PASS`, Navidrome down) new releases still land but
+nothing is deleted, so a show can briefly hold more than `keep`; a track
+Navidrome has not scanned yet is kept, and a live file that vanished counts as
+heard. Play counts are per user: `MLIB_ND_USER` must be the account Amperfy
+uses. Podcast code only ever deletes inside `<Show>/<Show>/`.
 
 - **Check the feed `add` picked.** Fan, clip and "audio biography" feeds copy a
   show's exact name; among exact matches the most recently updated wins, and
   `--pick N` or a feed URL overrides it.
 - Filter what a show mixes in (trailers, highlight clips, re-runs) with
-  `--min-minutes` and `--exclude`, so a clip never takes the one slot.
+  `--min-minutes` and `--exclude`, so a clip never takes a slot.
 - RSS audio is published as the publisher made it (mp3/m4a, tags wiped and
   rewritten). `--youtube <channel/playlist>` exists for shows with no feed.
 - **State lives in the library**, `.mlib/podcasts.json`, read and written
@@ -326,8 +335,10 @@ ever deletes inside `<Show>/<Show>/`.
   show failed; one failing show does not stop the others. A guid that failed
   3 downloads is skipped from then on.
 - Server: `scripts/install-podcast-timer.sh` installs an hourly systemd user
-  timer (`mlib-podcasts.timer`); its failures show in `systemctl --user
-  status`. Skill: `.claude/skills/podcasts`.
+  timer (`mlib-podcasts.timer`) and enables lingering; its failures show in
+  `systemctl --user status`. Every sync stamps `synced` (time, host) into the
+  shared state and `pod ls` prints it first, so a stale "last sync" from the
+  laptop means the server timer is not running. Skill: `.claude/skills/podcasts`.
 
 ## Running as an agent (interactively)
 
