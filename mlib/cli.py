@@ -4,6 +4,7 @@ Nothing reaches the library without an explicit `approve`, so an agent can fetch
 candidates freely and a human still decides what lands.
 """
 import argparse
+import json
 import sys
 from datetime import date, datetime, timezone
 
@@ -129,6 +130,20 @@ def cmd_add(args):
 
 def cmd_staged(args):
     files = _staged_files()
+    if getattr(args, "json", False):
+        rows = []
+        for i, path in enumerate(files, 1):
+            meta = fetch.read_sidecar(path)
+            rows.append({
+                "n": i,
+                "file": path.name,
+                "target": _target(meta, path.suffix),
+                "verdict": check.cached_verdict(meta),
+                "detail": (meta.get("check") or {}).get("detail") or "",
+                "source": meta.get("source"),
+            })
+        print(json.dumps(rows, ensure_ascii=False, indent=1))
+        return 0
     if not files:
         print("staging is empty")
         return 0
@@ -383,6 +398,18 @@ def cmd_batch(args):
         for e in entries:
             e["album"] = args.collection or args.album
 
+    # --report: one JSON row per entry, in input order, for a program to read.
+    report = [{"line": e["raw"], "artist": e["artist"], "title": e["title"],
+               "album": e["album"], "status": "unmatched", "confidence": 0.0,
+               "match": None, "url": None, "file": None, "target": None, "detail": ""}
+              for e in entries]
+    row_of = {id(e): r for e, r in zip(entries, report)}
+
+    def save_report():
+        if args.report:
+            _Path(args.report).write_text(json.dumps(report, ensure_ascii=False, indent=1),
+                                          encoding="utf-8")
+
     print("resolving {} track(s), {} at a time (no tokens used)".format(len(entries), args.jobs))
     done = [0]
 
@@ -396,6 +423,13 @@ def cmd_batch(args):
         entries, pool=args.pool, jobs=args.jobs, progress=progress, keep=args.keep
     )
 
+    for e, c, cand in results:
+        row = row_of[id(e)]
+        row["confidence"] = round(c, 3)
+        if cand:
+            row["match"], row["url"] = cand.get("raw_title"), cand.get("url")
+        if e.get("error"):
+            row["detail"] = e["error"]
     confident = [(e, c, cand) for e, c, cand in results if cand and c >= args.threshold]
     unsure = [(e, c, cand) for e, c, cand in results if not cand or c < args.threshold]
 
@@ -429,14 +463,22 @@ def cmd_batch(args):
             guessed, _t = split_artist_title(cand["raw_title"])
             entry["artist"] = clean(guessed or cand.get("channel") or "Unknown Artist")
 
+    for entry, _c, _cand in confident:
+        row_of[id(entry)].update(
+            artist=entry["artist"], title=entry["title"], album=entry["album"],
+            target=relpath(entry["artist"], entry["album"], entry["title"],
+                           collection=bool(args.collection)))
+
     if args.dry_run:
         print("\nwould stage {} track(s):".format(len(confident)))
         for entry, confidence, candidate in confident:
+            row_of[id(entry)]["status"] = "would_stage"
             print("  {}  <- {}".format(
                 relpath(entry["artist"], entry["album"], entry["title"],
                         collection=bool(args.collection)),
                 candidate["raw_title"]))
         _report_unsure(unsure)
+        save_report()
         print("\n(dry run - nothing downloaded)")
         return 0
 
@@ -444,8 +486,10 @@ def cmd_batch(args):
     for entry, confidence, candidate in confident:
         target = relpath(entry["artist"], entry["album"], entry["title"],
                          collection=bool(args.collection))
+        row = row_of[id(entry)]
         if store.exists(target):
             print("skip (already in library): " + target)
+            row["status"] = "exists"
             continue
         # Sources go missing or turn out to be age-gated, so fall back through
         # the runners-up for the same song rather than dropping it.
@@ -466,6 +510,7 @@ def cmd_batch(args):
         if not path:
             print("download failed for {} - {} (tried {} source(s)): {}".format(
                 entry["artist"], entry["title"], len(sources), last_error))
+            row.update(status="failed", detail=str(last_error)[:300])
             continue
 
         fetch.write_sidecar(path, {
@@ -476,10 +521,13 @@ def cmd_batch(args):
             "source": used["url"],
             "collection": bool(args.collection),
         })
+        row.update(status="staged", file=path.name, url=used["url"],
+                   match=used.get("raw_title") or row["match"])
         staged += 1
 
     print("\nstaged {} track(s). review with `mlib staged`, then `mlib approve`".format(staged))
     _report_unsure(unsure)
+    save_report()
     return 0
 
 
@@ -1054,11 +1102,15 @@ def build_parser():
     ba.add_argument("--no-assist", action="store_true",
                     help="do not call a model to fill in missing artists")
     ba.add_argument("--backend", help="LLM CLI for artist lookup (default: codex, then claude)")
+    ba.add_argument("--report", metavar="FILE",
+                    help="also write a JSON row per entry: status (staged, would_stage, exists, "
+                         "unmatched, failed), confidence, match, staged file, library target")
     ba.set_defaults(func=cmd_batch)
 
-    sub.add_parser("staged", help="list what is waiting for approval").set_defaults(
-        func=cmd_staged
-    )
+    st = sub.add_parser("staged", help="list what is waiting for approval")
+    st.add_argument("--json", action="store_true",
+                    help="print a JSON list (n, file, target, verdict, detail, source)")
+    st.set_defaults(func=cmd_staged)
 
     ap = sub.add_parser("approve", help="tag and publish staged files")
     ap.add_argument("selection", nargs="?", default="all", help="'all', '2', or '1,3-4'")

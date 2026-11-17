@@ -253,6 +253,12 @@ below `--threshold` (default 0.62) is **reported, not guessed at** — the point
 that a bad match is worse than no match, since a wrong file is tedious to find
 and remove later.
 
+For another program driving it, `mlib batch list.txt --report out.json` writes
+one row per line (`status`: staged / would_stage / exists / unmatched / failed,
+with confidence, the matched upload, the staged file and the library target),
+and `mlib staged --json` lists staging with each file's index and `check`
+verdict, so a caller can `check` / `approve` exactly the files it staged.
+
 Forty songs costs nothing and takes one command. Reach for `auto` only when the
 request is a description rather than a list.
 
