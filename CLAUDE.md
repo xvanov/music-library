@@ -331,6 +331,14 @@ uses. Podcast code only ever deletes inside `<Show>/<Show>/`.
   `--min-minutes` and `--exclude`, so a clip never takes a slot.
 - RSS audio is published as the publisher made it (mp3/m4a, tags wiped and
   rewritten). `--youtube <channel/playlist>` exists for shows with no feed.
+- **Post-processing hook** (optional): `MLIB_POD_POSTPROCESS_CMD` runs on each
+  downloaded episode after tagging, before publishing, with the file path as
+  its last argument and `MLIB_POD_SHOW` / `_TITLE` / `_GUID` / `_PUBLISHED` in
+  its environment. It may replace the file in place (e.g. cut the ads out; keep
+  the tags). Non-zero exit, a timeout (`MLIB_POD_POSTPROCESS_TIMEOUT`, default
+  6 h) or a missing/empty file puts the original back and publishes that: a
+  hook can improve an episode, never lose one. Its output lands in the sync
+  log. The sync lock is refreshed while it runs.
 - **State lives in the library**, `.mlib/podcasts.json`, read and written
   through `store.py` so the laptop (WebDAV) and the server (direct) share one
   file. Navidrome and the tagger skip dot-folders; dufs serves them (keep it

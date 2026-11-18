@@ -404,8 +404,8 @@ def test_one_failing_show_does_not_stop_the_others(world, monkeypatch):
 def test_a_show_removed_mid_sync_does_not_keep_its_new_file(world, monkeypatch):
     real = podcasts.publish
 
-    def publish_then_unsubscribe(show, ep, path):
-        target = real(show, ep, path)
+    def publish_then_unsubscribe(show, ep, path, **kw):
+        target = real(show, ep, path, **kw)
         with podcasts.edit() as state:
             del state["shows"][NAME]
         return target
@@ -556,3 +556,91 @@ def test_sync_records_when_and_where_it_ran(latest):
     assert synced["changed"] == 2 and synced["failed"] == [] and synced["host"]
     assert "last sync: " + synced["at"] in cli._last_sync(synced)
     assert "never" in cli._last_sync(None)
+
+
+# -- the post-processing hook (MLIB_POD_POSTPROCESS_CMD) ---------------------
+
+
+def _hook(tmp_path, body):
+    """A hook command: a small Python script run with this interpreter."""
+    script = tmp_path / "hook.py"
+    script.write_text("import os, sys\npath = sys.argv[-1]\n" + body, encoding="utf-8")
+    return "{} {}".format(sys.executable, script)
+
+
+EP = {"guid": "g-1", "title": "An episode", "published": "2026-11-17T00:00:00Z"}
+SHOW = {"name": "Example Talk Show"}
+
+
+def test_postprocess_off_by_default(tmp_path, monkeypatch):
+    monkeypatch.setattr(podcasts.cfg, "pod_postprocess_cmd", None)
+    f = tmp_path / "ep.mp3"
+    f.write_bytes(b"original")
+    assert podcasts.postprocess(SHOW, EP, f, log=lambda *a: None) is False
+    assert f.read_bytes() == b"original"
+
+
+def test_postprocess_may_replace_the_file_and_sees_the_episode(tmp_path, monkeypatch):
+    monkeypatch.setattr(podcasts.cfg, "pod_postprocess_cmd", _hook(tmp_path, (
+        "open(path, 'wb').write(b'cut')\n"
+        "print('removed 2 ads for', os.environ['MLIB_POD_SHOW'], os.environ['MLIB_POD_GUID'])\n")))
+    f = tmp_path / "ep.mp3"
+    f.write_bytes(b"original")
+    lines = []
+    assert podcasts.postprocess(SHOW, EP, f, log=lines.append) is True
+    assert f.read_bytes() == b"cut"
+    assert not (tmp_path / "ep.mp3.orig").exists()
+    assert any("removed 2 ads for Example Talk Show g-1" in ln for ln in lines)
+
+
+def test_a_failing_hook_restores_the_original(tmp_path, monkeypatch):
+    monkeypatch.setattr(podcasts.cfg, "pod_postprocess_cmd", _hook(tmp_path, (
+        "open(path, 'wb').write(b'half-written')\nsys.exit(3)\n")))
+    f = tmp_path / "ep.mp3"
+    f.write_bytes(b"original")
+    lines = []
+    assert podcasts.postprocess(SHOW, EP, f, log=lines.append) is False
+    assert f.read_bytes() == b"original"
+    assert any("exit 3" in ln and "publishing the original" in ln for ln in lines)
+
+
+def test_a_hook_that_deletes_or_empties_the_file_restores_it(tmp_path, monkeypatch):
+    f = tmp_path / "ep.mp3"
+    for body in ("os.remove(path)\n", "open(path, 'wb').close()\n"):
+        monkeypatch.setattr(podcasts.cfg, "pod_postprocess_cmd", _hook(tmp_path, body))
+        f.write_bytes(b"original")
+        assert podcasts.postprocess(SHOW, EP, f, log=lambda *a: None) is False
+        assert f.read_bytes() == b"original"
+
+
+def test_a_hook_that_hangs_is_killed_and_the_original_kept(tmp_path, monkeypatch):
+    monkeypatch.setattr(podcasts.cfg, "pod_postprocess_cmd",
+                        _hook(tmp_path, "import time\ntime.sleep(30)\n"))
+    monkeypatch.setattr(podcasts.cfg, "pod_postprocess_timeout", 1)
+    f = tmp_path / "ep.mp3"
+    f.write_bytes(b"original")
+    lines = []
+    assert podcasts.postprocess(SHOW, EP, f, log=lines.append) is False
+    assert f.read_bytes() == b"original"
+    assert any("timed out" in ln for ln in lines)
+
+
+def test_a_missing_hook_command_still_publishes(world, tmp_path, monkeypatch):
+    monkeypatch.setattr(podcasts.cfg, "pod_postprocess_cmd", str(tmp_path / "no-such-hook"))
+    assert world.sync() == (1, [])
+    assert world.lib.files == {EP3}
+
+
+def test_sync_publishes_what_the_hook_made(world, tmp_path, monkeypatch):
+    seen = {}
+    real_put = podcasts.store.put
+
+    def put(local, rel):
+        seen[rel] = Path(local).read_bytes()
+        real_put(local, rel)
+
+    monkeypatch.setattr(podcasts.store, "put", put)
+    monkeypatch.setattr(podcasts.cfg, "pod_postprocess_cmd",
+                        _hook(tmp_path, "open(path, 'wb').write(b'no ads')\n"))
+    assert world.sync() == (1, [])
+    assert seen == {EP3: b"no ads"}
