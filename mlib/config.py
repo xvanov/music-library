@@ -42,6 +42,11 @@ class Config:
     # A played podcast episode stays this long before `pod sync` deletes it:
     # Amperfy may scrobble at the start or halfway, not only at the end.
     pod_grace_hours = float(os.environ.get("MLIB_POD_GRACE_HOURS") or 6)
+    # Optional: a command run on each downloaded episode before it is published
+    # (e.g. one that cuts ads out). It gets the file path as its last argument
+    # and may replace the file in place; a failure publishes the original.
+    pod_postprocess_cmd = os.environ.get("MLIB_POD_POSTPROCESS_CMD") or None
+    pod_postprocess_timeout = float(os.environ.get("MLIB_POD_POSTPROCESS_TIMEOUT") or 6 * 3600)
 
     @classmethod
     def mode(cls):

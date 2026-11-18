@@ -36,12 +36,23 @@ show. That is the ordinary <Artist>/<Album>/<Title> shape, so the server-side
 tagger derives the same tags mlib writes (a leading year is not a track number:
 TRACKNUM takes at most three digits). A `Podcasts/` prefix would read as artist
 "Podcasts"; genre Podcast is what sets the episodes apart instead.
+
+Post-processing: with MLIB_POD_POSTPROCESS_CMD set, each downloaded episode is
+handed to that command after it is tagged and before it is published (the path
+is its last argument; MLIB_POD_SHOW / _TITLE / _GUID / _PUBLISHED describe the
+episode). The command may replace the file in place, e.g. with a copy that has
+the ads cut out. A non-zero exit, a timeout (MLIB_POD_POSTPROCESS_TIMEOUT,
+default 6 h) or a missing or empty file restores the original, which is then
+published: the hook can improve an episode, never lose one.
 """
 import hashlib
 import json
 import os
 import re
+import shlex
+import shutil
 import subprocess
+import time
 import xml.etree.ElementTree as ET
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
@@ -408,15 +419,74 @@ def remux_aac(path):
     return out
 
 
-def publish(show, ep, path):
-    """Tag one downloaded episode and put it in the library. Returns its relpath."""
+def publish(show, ep, path, log=print, keepalive=None):
+    """Tag one downloaded episode, post-process it (if configured) and put it in
+    the library. Returns its relpath."""
     name = show["name"]
     tag.wipe(path)      # publishers' tags vary; mlib's are the only ones that matter
     tag.apply(path, artist=name, album=name, title=episode_title(ep), albumartist=name,
               genre=GENRE)
+    postprocess(show, ep, path, log=log, keepalive=keepalive)
     target = target_path(show, ep, Path(path).suffix)
     store.put(path, target)
     return target
+
+
+def postprocess(show, ep, path, log=print, keepalive=None):
+    """Run MLIB_POD_POSTPROCESS_CMD on a downloaded, tagged episode. True when it
+    succeeded; on any failure the original file is put back and False returned,
+    so the episode is published as downloaded."""
+    cmd = cfg.pod_postprocess_cmd
+    if not cmd:
+        return False
+    path = Path(path)
+    backup = path.with_name(path.name + ".orig")
+    shutil.copy2(path, backup)
+    env = dict(os.environ, MLIB_POD_SHOW=show["name"], MLIB_POD_TITLE=ep.get("title") or "",
+               MLIB_POD_GUID=ep.get("guid") or "", MLIB_POD_PUBLISHED=ep.get("published") or "")
+    ok, why = False, ""
+    try:
+        proc = subprocess.Popen(shlex.split(cmd, posix=os.name != "nt") + [str(path)], env=env,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                errors="replace")
+        out, timed_out = _wait(proc, cfg.pod_postprocess_timeout, keepalive)
+        for line in out.splitlines()[-20:]:
+            if line.strip():
+                log("    " + line.rstrip())
+        if timed_out:
+            why = "timed out"
+        elif proc.returncode != 0:
+            why = "exit {}".format(proc.returncode)
+        elif not path.is_file() or path.stat().st_size == 0:
+            why = "it left no file"
+        else:
+            ok = True
+    except OSError as exc:
+        why = str(exc)
+    if ok:
+        backup.unlink()
+    else:
+        os.replace(backup, path)
+        log("  post-processing failed ({}) - publishing the original".format(why))
+    return ok
+
+
+def _wait(proc, timeout, keepalive=None):
+    """Wait for the command, refreshing the sync lock meanwhile (a long hook must
+    not let another sync take the lock). Kills it at the timeout.
+    Returns (output, timed_out)."""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            out, _ = proc.communicate(timeout=min(30, max(0.1, deadline - time.monotonic())))
+            return out or "", False
+        except subprocess.TimeoutExpired:
+            if keepalive:
+                touch(keepalive)
+            if time.monotonic() >= deadline:
+                proc.kill()
+                out, _ = proc.communicate()
+                return out or "", True
 
 
 # -- the cycle -----------------------------------------------------------
@@ -539,7 +609,7 @@ def fill(show, log=print, keepalive=None):
         log("  downloading: {}".format(episode_title(ep)))
         try:
             local = download_episode(ep, keepalive=keepalive)
-            target = publish(show, ep, local)
+            target = publish(show, ep, local, log=log, keepalive=keepalive)
         except Exception:
             _update(show["name"], lambda s: _failed(s, ep["guid"]))
             raise
