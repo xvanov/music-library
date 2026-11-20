@@ -333,9 +333,11 @@ uses. Podcast code only ever deletes inside `<Show>/<Show>/`.
   rewritten). `--youtube <channel/playlist>` exists for shows with no feed.
 - **Post-processing hook** (optional): `MLIB_POD_POSTPROCESS_CMD` runs on each
   downloaded episode after tagging, before publishing, with the file path as
-  its last argument and `MLIB_POD_SHOW` / `_TITLE` / `_GUID` / `_PUBLISHED` in
-  its environment. It may replace the file in place (e.g. cut the ads out; keep
-  the tags). Non-zero exit, a timeout (`MLIB_POD_POSTPROCESS_TIMEOUT`, default
+  its last argument and `MLIB_POD_SHOW` / `_TITLE` / `_GUID` / `_PUBLISHED` /
+  `_URL` in its environment (`_URL`: where the episode came from, the
+  enclosure or the YouTube watch page, so a hook can use the video id, e.g. for
+  SponsorBlock). It may replace the file in place (e.g. cut the ads out; keep
+  the tags); the replacement gets the original's file mode back. Non-zero exit, a timeout (`MLIB_POD_POSTPROCESS_TIMEOUT`, default
   6 h) or a missing/empty file puts the original back and publishes that: a
   hook can improve an episode, never lose one. Its output lands in the sync
   log. The sync lock is refreshed while it runs.

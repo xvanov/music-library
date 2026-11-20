@@ -39,11 +39,13 @@ TRACKNUM takes at most three digits). A `Podcasts/` prefix would read as artist
 
 Post-processing: with MLIB_POD_POSTPROCESS_CMD set, each downloaded episode is
 handed to that command after it is tagged and before it is published (the path
-is its last argument; MLIB_POD_SHOW / _TITLE / _GUID / _PUBLISHED describe the
-episode). The command may replace the file in place, e.g. with a copy that has
-the ads cut out. A non-zero exit, a timeout (MLIB_POD_POSTPROCESS_TIMEOUT,
-default 6 h) or a missing or empty file restores the original, which is then
-published: the hook can improve an episode, never lose one.
+is its last argument; MLIB_POD_SHOW / _TITLE / _GUID / _PUBLISHED / _URL describe
+the episode, _URL being where it was downloaded from: the enclosure, or the
+YouTube watch page). The command may replace the file in place, e.g. with a
+copy that has the ads cut out; the replacement keeps the original's mode. A
+non-zero exit, a timeout (MLIB_POD_POSTPROCESS_TIMEOUT, default 6 h) or a
+missing or empty file restores the original, which is then published: the hook
+can improve an episode, never lose one.
 """
 import hashlib
 import json
@@ -443,7 +445,8 @@ def postprocess(show, ep, path, log=print, keepalive=None):
     backup = path.with_name(path.name + ".orig")
     shutil.copy2(path, backup)
     env = dict(os.environ, MLIB_POD_SHOW=show["name"], MLIB_POD_TITLE=ep.get("title") or "",
-               MLIB_POD_GUID=ep.get("guid") or "", MLIB_POD_PUBLISHED=ep.get("published") or "")
+               MLIB_POD_GUID=ep.get("guid") or "", MLIB_POD_PUBLISHED=ep.get("published") or "",
+               MLIB_POD_URL=ep.get("url") or "")
     ok, why = False, ""
     try:
         proc = subprocess.Popen(shlex.split(cmd, posix=os.name != "nt") + [str(path)], env=env,
@@ -464,6 +467,9 @@ def postprocess(show, ep, path, log=print, keepalive=None):
     except OSError as exc:
         why = str(exc)
     if ok:
+        # A hook that writes a temp file and renames it over the original
+        # leaves that file's mode (0600 from mkstemp), unlike the rest of the library.
+        shutil.copymode(backup, path)
         backup.unlink()
     else:
         os.replace(backup, path)
