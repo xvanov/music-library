@@ -1,5 +1,6 @@
 """Podcasts: feed parsing, choosing the next episode, and the heard -> replace cycle."""
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -568,7 +569,8 @@ def _hook(tmp_path, body):
     return "{} {}".format(sys.executable, script)
 
 
-EP = {"guid": "g-1", "title": "An episode", "published": "2026-11-17T00:00:00Z"}
+EP = {"guid": "g-1", "title": "An episode", "published": "2026-11-17T00:00:00Z",
+      "url": "https://www.youtube.com/watch?v=abc123"}
 SHOW = {"name": "Example Talk Show"}
 
 
@@ -583,14 +585,31 @@ def test_postprocess_off_by_default(tmp_path, monkeypatch):
 def test_postprocess_may_replace_the_file_and_sees_the_episode(tmp_path, monkeypatch):
     monkeypatch.setattr(podcasts.cfg, "pod_postprocess_cmd", _hook(tmp_path, (
         "open(path, 'wb').write(b'cut')\n"
-        "print('removed 2 ads for', os.environ['MLIB_POD_SHOW'], os.environ['MLIB_POD_GUID'])\n")))
+        "print('removed 2 ads for', os.environ['MLIB_POD_SHOW'], os.environ['MLIB_POD_GUID'],\n"
+        "      os.environ['MLIB_POD_URL'])\n")))
     f = tmp_path / "ep.mp3"
     f.write_bytes(b"original")
     lines = []
     assert podcasts.postprocess(SHOW, EP, f, log=lines.append) is True
     assert f.read_bytes() == b"cut"
     assert not (tmp_path / "ep.mp3.orig").exists()
-    assert any("removed 2 ads for Example Talk Show g-1" in ln for ln in lines)
+    assert any("removed 2 ads for Example Talk Show g-1 https://www.youtube.com/watch?v=abc123" in ln
+               for ln in lines)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes")
+def test_a_hook_replacement_keeps_the_original_mode(tmp_path, monkeypatch):
+    # Like ads-hook: a private temp file renamed over the episode.
+    monkeypatch.setattr(podcasts.cfg, "pod_postprocess_cmd", _hook(tmp_path, (
+        "import tempfile\n"
+        "fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))\n"
+        "os.write(fd, b'cut'); os.close(fd); os.replace(tmp, path)\n")))
+    f = tmp_path / "ep.mp3"
+    f.write_bytes(b"original")
+    f.chmod(0o644)
+    assert podcasts.postprocess(SHOW, EP, f, log=lambda *a: None) is True
+    assert f.read_bytes() == b"cut"
+    assert f.stat().st_mode & 0o777 == 0o644
 
 
 def test_a_failing_hook_restores_the_original(tmp_path, monkeypatch):
